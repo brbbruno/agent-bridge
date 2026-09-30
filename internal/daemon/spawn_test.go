@@ -23,7 +23,7 @@ func TestSpawnDetachedUsesAgentBridgeHomeAsWorkingDirectory(t *testing.T) {
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(probe)
 		if err == nil {
-			if got := strings.TrimSpace(string(data)); filepath.Clean(got) != filepath.Clean(home) {
+			if got := strings.TrimSpace(string(data)); resolvedPath(got) != resolvedPath(home) {
 				t.Fatalf("daemon cwd=%q, want %q", got, home)
 			}
 			return
@@ -45,4 +45,11 @@ func TestSpawnHelperProcess(t *testing.T) {
 	if err := os.WriteFile(probe, []byte(cwd), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func resolvedPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return filepath.Clean(path)
 }
