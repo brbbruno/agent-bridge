@@ -1,0 +1,1 @@
+{"hook_event_name":"PermissionRequest","tool_name":"exec","tool_input":{"command":"python -c \"open('logs/permission-approved.txt','w').write('approved')\""},"tool_use_id":"call_667d5ac44858475d970526ee#b7d71b8012314db1add996b61ce2ec3c","session_id":"nice-nigella","prompt_id":"62a4d49f-2323-44cc-aa7f-26d71ac78d33"}

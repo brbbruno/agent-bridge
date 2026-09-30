@@ -1,0 +1,1 @@
+{"session_id":"claude-session","cwd":"/tmp/demo","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Pick tags","header":"Tags","options":[{"label":"A"},{"label":"B"}],"multiSelect":true}]},"tool_use_id":"toolu_test_multi"}

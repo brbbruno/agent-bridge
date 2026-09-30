@@ -1,0 +1,12 @@
+/artifacts/
+/dist/
+/agent-bridge
+/agent-bridge.exe
+*.test
+coverage.out
+*.prof
+*.bak.*
+/config.json
+/daemon.token
+/state.json
+/agent-bridge.log
