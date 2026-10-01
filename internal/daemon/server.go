@@ -20,12 +20,12 @@ import (
 )
 
 type Server struct {
-	Home    string
-	Config  config.Config
-	Token   string
-	Router  *Router
-	Channel channel.Channel
-	Logger  *logx.Logger
+	Home     string
+	Config   config.Config
+	Token    string
+	Router   *Router
+	Channels []channel.Channel
+	Logger   *logx.Logger
 
 	mu       sync.Mutex
 	cancel   context.CancelFunc
@@ -33,12 +33,13 @@ type Server struct {
 	listener net.Listener
 }
 
-func NewServer(home string, cfg config.Config, token string, telegram channel.Channel, logger *logx.Logger) (*Server, error) {
-	router, err := NewRouter(home, cfg, telegram, logger)
+func NewServer(home string, cfg config.Config, token string, channels []channel.Channel, logger *logx.Logger) (*Server, error) {
+	channels = filterChannels(channels)
+	router, err := NewRouter(home, cfg, channels, logger)
 	if err != nil {
 		return nil, err
 	}
-	return &Server{Home: home, Config: cfg, Token: token, Router: router, Channel: telegram, Logger: logger, started: time.Now()}, nil
+	return &Server{Home: home, Config: cfg, Token: token, Router: router, Channels: channels, Logger: logger, started: time.Now()}, nil
 }
 
 func (s *Server) Address() string { return "127.0.0.1:" + strconv.Itoa(s.Config.Port) }
@@ -67,8 +68,12 @@ func (s *Server) Run(ctx context.Context) error {
 	s.started = time.Now()
 	s.mu.Unlock()
 	defer cancel()
-	if s.Channel != nil {
-		go s.pollTelegram(runCtx)
+	for _, ch := range s.Channels {
+		go func(ch channel.Channel) {
+			if err := ch.Run(runCtx, s.Router.HandleUpdate); err != nil && runCtx.Err() == nil && s.Logger != nil {
+				s.Logger.Errorf("executar canal %s: %v", ch.Name(), err)
+			}
+		}(ch)
 	}
 	httpServer := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
@@ -157,14 +162,24 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "método não permitido", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.Channel == nil {
+	if len(s.Channels) == 0 {
 		http.Error(w, "canal não configurado", http.StatusServiceUnavailable)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	if _, err := s.Channel.Send(ctx, "Teste do agent-bridge: conexão com o Telegram funcionando.", nil, false); err != nil {
-		s.Logger.Errorf("enviar teste Telegram: %v", err)
+	sent := false
+	for _, ch := range s.Channels {
+		text := fmt.Sprintf("Teste do agent-bridge: conexão com o %s funcionando.", ch.Name())
+		if _, err := ch.Send(ctx, channel.Outgoing{Text: text}); err != nil {
+			if s.Logger != nil {
+				s.Logger.Errorf("enviar teste %s: %v", ch.Name(), err)
+			}
+			continue
+		}
+		sent = true
+	}
+	if !sent {
 		http.Error(w, "não foi possível enviar a mensagem de teste", http.StatusBadGateway)
 		return
 	}
@@ -182,33 +197,6 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	if cancel != nil {
 		go cancel()
-	}
-}
-
-func (s *Server) pollTelegram(ctx context.Context) {
-	var offset int64
-	for ctx.Err() == nil {
-		updates, err := s.Channel.Updates(ctx, offset, 30)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			s.Logger.Errorf("receber atualização Telegram: %v", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Second):
-			}
-			continue
-		}
-		for _, update := range updates {
-			if update.ID >= offset {
-				offset = update.ID + 1
-			}
-			if !update.Ignored {
-				s.Router.HandleUpdate(ctx, update)
-			}
-		}
 	}
 }
 

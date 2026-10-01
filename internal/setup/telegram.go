@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brbbruno/agent-bridge/internal/channel"
 	"github.com/brbbruno/agent-bridge/internal/channel/telegram"
 	"github.com/brbbruno/agent-bridge/internal/config"
 	"golang.org/x/term"
@@ -133,7 +134,7 @@ func telegramWithTerminal(ctx context.Context, home string, cfg config.Config, o
 	bot = telegram.New(botToken, chatID, apiBase)
 	confirmCtx, confirmCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer confirmCancel()
-	if _, err := bot.Send(confirmCtx, "Configuração do agent-bridge concluída. Use /help para ver os comandos.", nil, false); err != nil {
+	if _, err := bot.Send(confirmCtx, channel.Outgoing{Text: "Configuração do agent-bridge concluída. Use /help para ver os comandos."}); err != nil {
 		return cfg, fmt.Errorf("configuração salva, mas a confirmação não foi enviada: %w", err)
 	}
 	return cfg, nil

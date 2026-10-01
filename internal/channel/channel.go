@@ -11,6 +11,26 @@ type Button struct {
 
 type Keyboard [][]Button
 
+type SessionRef struct {
+	ID      string
+	Name    string
+	Title   string
+	Project string
+	Agent   string
+}
+
+type Outgoing struct {
+	Session  SessionRef
+	Text     string
+	Keyboard Keyboard
+	ReplyTo  int64
+}
+
+type MessageKey struct {
+	Channel string
+	ID      int64
+}
+
 type SentMessage struct {
 	ID     int64
 	IDs    []int64
@@ -18,6 +38,7 @@ type SentMessage struct {
 }
 
 type Update struct {
+	Channel        string
 	ID             int64
 	ChatID         int64
 	UserID         int64
@@ -27,16 +48,20 @@ type Update struct {
 	MessageID      int64
 	ReplyToMessage int64
 	Text           string
+	TextToken      string
+	SessionID      string
 	CallbackID     string
 	CallbackData   string
 	Ignored        bool
 }
 
 type Channel interface {
-	Send(ctx context.Context, text string, keyboard Keyboard, forceReply bool) (SentMessage, error)
-	SendReply(ctx context.Context, replyToMessageID int64, text string) (SentMessage, error)
+	Name() string
+	MessageLimit() int
+	Run(ctx context.Context, handle func(context.Context, Update)) error
+	Send(ctx context.Context, message Outgoing) (SentMessage, error)
 	Edit(ctx context.Context, messageID int64, text string, keyboard Keyboard) error
 	EditReplyMarkup(ctx context.Context, messageID int64, keyboard Keyboard) error
-	AnswerCallback(ctx context.Context, callbackID, text string) error
-	Updates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error)
+	AnswerCallback(ctx context.Context, update Update, text string) error
+	RequestText(ctx context.Context, update Update, session SessionRef, prompt, token string) (SentMessage, error)
 }

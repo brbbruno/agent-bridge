@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brbbruno/agent-bridge/internal/channel"
 	"github.com/brbbruno/agent-bridge/internal/channel/telegram"
 	"github.com/brbbruno/agent-bridge/internal/config"
 	"github.com/brbbruno/agent-bridge/internal/daemon"
@@ -200,8 +201,12 @@ func runDaemonForeground() error {
 		return err
 	}
 	logger := logx.New(config.LogPath(home))
-	bot := makeTelegramChannel(cfg)
-	server, err := daemon.NewServer(home, cfg, token, bot, logger)
+	var channels []channel.Channel
+	if bot := makeTelegramChannel(cfg); bot != nil {
+		bot.SetLogger(logger)
+		channels = append(channels, bot)
+	}
+	server, err := daemon.NewServer(home, cfg, token, channels, logger)
 	if err != nil {
 		return err
 	}

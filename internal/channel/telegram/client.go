@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/brbbruno/agent-bridge/internal/channel"
+	"github.com/brbbruno/agent-bridge/internal/logx"
 )
 
 const MaxMessageRunes = channel.MaxMessageRunes
@@ -22,6 +23,7 @@ type Client struct {
 	chatID int64
 	base   string
 	http   *http.Client
+	logger *logx.Logger
 }
 
 func New(token string, chatID int64, apiBase string) *Client {
@@ -35,6 +37,47 @@ func (c *Client) SetHTTPClient(client *http.Client) {
 	if client != nil {
 		c.http = client
 	}
+}
+
+func (c *Client) SetLogger(logger *logx.Logger) { c.logger = logger }
+
+func (c *Client) Name() string { return "Telegram" }
+
+func (c *Client) MessageLimit() int { return MaxMessageRunes }
+
+func (c *Client) Run(ctx context.Context, handle func(context.Context, channel.Update)) error {
+	if handle == nil {
+		return errors.New("handler de atualização Telegram ausente")
+	}
+	var offset int64
+	for ctx.Err() == nil {
+		updates, err := c.Updates(ctx, offset, 30)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if c.logger != nil {
+				c.logger.Errorf("receber atualização Telegram: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		for _, update := range updates {
+			if update.ID >= offset {
+				offset = update.ID + 1
+			}
+			if update.Ignored {
+				continue
+			}
+			update.Channel = c.Name()
+			handle(ctx, update)
+		}
+	}
+	return nil
 }
 
 type APIError struct {
@@ -352,12 +395,12 @@ func fenceStateAt(source []rune, end int) (bool, string) {
 	return inside, openingLine
 }
 
-func (c *Client) Send(ctx context.Context, text string, keyboard channel.Keyboard, forceReply bool) (channel.SentMessage, error) {
-	return c.send(ctx, text, keyboard, forceReply, 0)
+func (c *Client) Send(ctx context.Context, message channel.Outgoing) (channel.SentMessage, error) {
+	return c.send(ctx, message.Text, message.Keyboard, false, message.ReplyTo)
 }
 
-func (c *Client) SendReply(ctx context.Context, replyToMessageID int64, text string) (channel.SentMessage, error) {
-	return c.send(ctx, text, nil, false, replyToMessageID)
+func (c *Client) RequestText(ctx context.Context, _ channel.Update, _ channel.SessionRef, prompt, _ string) (channel.SentMessage, error) {
+	return c.send(ctx, prompt, nil, true, 0)
 }
 
 func (c *Client) send(ctx context.Context, text string, keyboard channel.Keyboard, forceReply bool, replyToMessageID int64) (channel.SentMessage, error) {
@@ -433,8 +476,8 @@ func (c *Client) EditReplyMarkup(ctx context.Context, messageID int64, keyboard 
 	return err
 }
 
-func (c *Client) AnswerCallback(ctx context.Context, callbackID, text string) error {
-	return c.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": callbackID, "text": text}, nil)
+func (c *Client) AnswerCallback(ctx context.Context, update channel.Update, text string) error {
+	return c.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": update.CallbackID, "text": text}, nil)
 }
 
 func (c *Client) Updates(ctx context.Context, offset int64, timeoutSeconds int) ([]channel.Update, error) {

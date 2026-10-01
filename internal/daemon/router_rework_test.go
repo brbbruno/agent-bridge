@@ -23,7 +23,7 @@ func newReworkRouter(t *testing.T, wait time.Duration) (*Router, *fake.Fake) {
 	cfg.PermissionWait = wait
 	cfg.QuestionWait = wait
 	bot := fake.New()
-	router, err := NewRouter(t.TempDir(), cfg, bot, logx.New(""))
+	router, err := NewRouter(t.TempDir(), cfg, []channel.Channel{bot}, logx.New(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestReworkStopResolutionKeepsOriginalText(t *testing.T) {
 	event := model.Event{Agent: model.AgentDevin, Type: model.EventStop, SessionID: "stop", SessionName: "stop", Project: "demo", Message: "Resposta original do agente"}
 	result := runReworkEvent(router, event)
 	original := waitReworkSends(t, bot, 1)[0]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: reworkChatID, ReplyToMessage: original.ID, Text: "Continue"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: reworkChatID, ReplyToMessage: original.ID, Text: "Continue"})
 	if got := <-result; got.Action != model.ActionBlock {
 		t.Fatalf("resolução=%+v", got)
 	}
@@ -81,10 +81,10 @@ func TestReworkPermissionInstructionKeepsOriginalText(t *testing.T) {
 	result := runReworkEvent(router, event)
 	original := waitReworkSends(t, bot, 1)[0]
 	instruction := original.Keyboard[0][2]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: reworkChatID, CallbackID: "deny-instruction", CallbackData: instruction.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: reworkChatID, CallbackID: "deny-instruction", CallbackData: instruction.Data})
 	sent := waitReworkSends(t, bot, 2)
 	forceReply := sent[1]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: reworkChatID, ReplyToMessage: forceReply.ID, Text: "Não execute"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: reworkChatID, ReplyToMessage: forceReply.ID, Text: "Não execute"})
 	if got := <-result; got.Action != model.ActionDeny {
 		t.Fatalf("resolução=%+v", got)
 	}
@@ -98,7 +98,7 @@ func TestReworkQuestionResolutionKeepsQuestionAndAnswer(t *testing.T) {
 	result := runReworkEvent(router, event)
 	original := waitReworkSends(t, bot, 1)[0]
 	green := original.Keyboard[1][0]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: reworkChatID, CallbackID: "green", CallbackData: green.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: reworkChatID, CallbackID: "green", CallbackData: green.Data})
 	if got := <-result; got.Action != model.ActionBlock {
 		t.Fatalf("resolução=%+v", got)
 	}
@@ -113,7 +113,7 @@ func TestReworkLongStopKeepsChunksAndRepliesWithStatus(t *testing.T) {
 	result := runReworkEvent(router, event)
 	originals := waitReworkSends(t, bot, 3)
 	last := originals[2]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: reworkChatID, ReplyToMessage: originals[0].ID, Text: "Continue"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: reworkChatID, ReplyToMessage: originals[0].ID, Text: "Continue"})
 	if got := <-result; got.Action != model.ActionBlock {
 		t.Fatalf("resolução=%+v", got)
 	}
@@ -140,10 +140,10 @@ func TestReworkLongPermissionRemovesMarkupAndRepliesWithStatus(t *testing.T) {
 		t.Fatal("último segmento da permissão deveria conter o teclado")
 	}
 	instruction := last.Keyboard[0][2]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: reworkChatID, CallbackID: "deny-instruction", CallbackData: instruction.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: reworkChatID, CallbackID: "deny-instruction", CallbackData: instruction.Data})
 	sent := waitReworkSends(t, bot, 4)
 	forceReply := sent[3]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: reworkChatID, ReplyToMessage: forceReply.ID, Text: "Não execute"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: reworkChatID, ReplyToMessage: forceReply.ID, Text: "Não execute"})
 	if got := <-result; got.Action != model.ActionDeny {
 		t.Fatalf("resolução=%+v", got)
 	}
@@ -177,7 +177,8 @@ func TestPruneLateMessageRegistryAndSessionLabels(t *testing.T) {
 	router.waiting["waiting-session"] = "pending-id"
 	router.state.Queues["queued-session"] = []string{"resposta"}
 	for id := int64(1); id <= lateMessageLimit+3; id++ {
-		router.lateMessage[id] = lateMessageEntry{sessionID: "late-session", createdAt: now.Add(time.Duration(id) * time.Second)}
+		key := channel.MessageKey{Channel: "Telegram", ID: id}
+		router.lateMessage[key] = lateMessageEntry{sessionID: "late-session", createdAt: now.Add(time.Duration(id) * time.Second)}
 	}
 	router.pruneLateMessagesLocked(now)
 	if len(router.lateMessage) != lateMessageLimit {
@@ -185,7 +186,7 @@ func TestPruneLateMessageRegistryAndSessionLabels(t *testing.T) {
 		t.Fatalf("lateMessage=%d, esperava %d", len(router.lateMessage), lateMessageLimit)
 	}
 	for id := int64(1); id <= 3; id++ {
-		if _, ok := router.lateMessage[id]; ok {
+		if _, ok := router.lateMessage[channel.MessageKey{Channel: "Telegram", ID: id}]; ok {
 			router.mu.Unlock()
 			t.Fatalf("entrada antiga %d não foi removida", id)
 		}

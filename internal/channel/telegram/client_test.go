@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brbbruno/agent-bridge/internal/channel"
 )
@@ -40,7 +41,7 @@ func TestSendSplitsAndSupportsForceReply(t *testing.T) {
 	defer server.Close()
 	client := New("TOKEN", 9, server.URL)
 	client.SetHTTPClient(server.Client())
-	message, err := client.Send(context.Background(), strings.Repeat("x", 5000), channel.Keyboard{{{Text: "Outro (texto)", Data: "q:a:0:o"}}}, false)
+	message, err := client.Send(context.Background(), channel.Outgoing{Text: strings.Repeat("x", 5000), Keyboard: channel.Keyboard{{{Text: "Outro (texto)", Data: "q:a:0:o"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func TestSendSplitsAndSupportsForceReply(t *testing.T) {
 	if !ok || markup["inline_keyboard"] == nil {
 		t.Fatalf("inline keyboard ausente: %v", got[1]["reply_markup"])
 	}
-	_, err = client.Send(context.Background(), "Digite sua resposta", nil, true)
+	_, err = client.RequestText(context.Background(), channel.Update{}, channel.SessionRef{}, "Digite sua resposta", "token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func TestAnswerCallbackQuery(t *testing.T) {
 	defer server.Close()
 	client := New("TOKEN", 9, server.URL)
 	client.SetHTTPClient(server.Client())
-	if err := client.AnswerCallback(context.Background(), "callback-123", "Resposta recebida"); err != nil {
+	if err := client.AnswerCallback(context.Background(), channel.Update{CallbackID: "callback-123"}, "Resposta recebida"); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -128,7 +129,7 @@ func TestSendReplyAndEditReplyMarkup(t *testing.T) {
 	defer server.Close()
 	client := New("TOKEN", 9, server.URL)
 	client.SetHTTPClient(server.Client())
-	if _, err := client.SendReply(context.Background(), 41, "Status da solicitação"); err != nil {
+	if _, err := client.Send(context.Background(), channel.Outgoing{ReplyTo: 41, Text: "Status da solicitação"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.EditReplyMarkup(context.Background(), 41, nil); err != nil {
@@ -186,7 +187,7 @@ func TestSendRendersHTMLAndKeepsSourceChunks(t *testing.T) {
 	client := New("TOKEN", 9, server.URL)
 	client.SetHTTPClient(server.Client())
 	source := "**bold** & <tag>"
-	message, err := client.Send(context.Background(), source, nil, false)
+	message, err := client.Send(context.Background(), channel.Outgoing{Text: source})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +218,7 @@ func TestSendRetriesWithoutHTMLWhenTelegramCannotParseEntities(t *testing.T) {
 	client := New("TOKEN", 9, server.URL)
 	client.SetHTTPClient(server.Client())
 	source := "**bold**"
-	message, err := client.Send(context.Background(), source, nil, false)
+	message, err := client.Send(context.Background(), channel.Outgoing{Text: source})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,5 +311,79 @@ func TestSplitTextReopensIndentedFenceAcrossChunks(t *testing.T) {
 		if got := len([]rune(chunk)); got > 50 {
 			t.Fatalf("chunk %d excedeu limite: %d", index, got)
 		}
+	}
+}
+
+func TestTelegramRunSetsChannelAndAdvancesOffset(t *testing.T) {
+	secondOffset := make(chan int64, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Offset int64 `json:"offset"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.Offset == 0 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": []any{
+				map[string]any{"update_id": 1, "message": map[string]any{"message_id": 12, "text": "oi", "chat": map[string]any{"id": 9, "type": "private"}, "from": map[string]any{"id": 8}}},
+			}})
+			return
+		}
+		secondOffset <- request.Offset
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := make(chan channel.Update, 1)
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx, func(_ context.Context, update channel.Update) { updates <- update }) }()
+	select {
+	case update := <-updates:
+		if update.Channel != "Telegram" || update.Text != "oi" {
+			t.Fatalf("update=%+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não entregou a atualização")
+	}
+	select {
+	case offset := <-secondOffset:
+		if offset != 2 {
+			t.Fatalf("offset seguinte=%d; esperado 2", offset)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não avançou o offset")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não encerrou após cancelar o contexto")
+	}
+}
+
+func TestTelegramRequestTextUsesForceReply(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 31}})
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	message, err := client.RequestText(context.Background(), channel.Update{MessageID: 24}, channel.SessionRef{ID: "s"}, "Digite sua resposta", "t:p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	markup, ok := request["reply_markup"].(map[string]any)
+	if !ok || markup["force_reply"] != true || message.ID != 31 {
+		t.Fatalf("RequestText request=%+v message=%+v", request, message)
 	}
 }

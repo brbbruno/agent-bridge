@@ -3,6 +3,8 @@ package daemon
 import (
 	"testing"
 	"time"
+
+	"github.com/brbbruno/agent-bridge/internal/channel"
 )
 
 func TestPruneLateMessagesByAgeAndOldestFirstLimit(t *testing.T) {
@@ -16,7 +18,8 @@ func TestPruneLateMessagesByAgeAndOldestFirstLimit(t *testing.T) {
 	router.waiting["waiting-session"] = "pending-id"
 	router.state.Queues["queued-session"] = []string{"resposta pendente"}
 	for id := int64(1); id <= lateMessageLimit+3; id++ {
-		router.lateMessage[id] = lateMessageEntry{sessionID: "late-session", createdAt: now.Add(time.Duration(id) * time.Second)}
+		key := channel.MessageKey{Channel: "Telegram", ID: id}
+		router.lateMessage[key] = lateMessageEntry{sessionID: "late-session", createdAt: now.Add(time.Duration(id) * time.Second)}
 	}
 	router.pruneLateMessagesLocked(now)
 	if len(router.lateMessage) != lateMessageLimit {
@@ -24,7 +27,7 @@ func TestPruneLateMessagesByAgeAndOldestFirstLimit(t *testing.T) {
 		t.Fatalf("lateMessage=%d, esperava limite %d", len(router.lateMessage), lateMessageLimit)
 	}
 	for id := int64(1); id <= 3; id++ {
-		if _, exists := router.lateMessage[id]; exists {
+		if _, exists := router.lateMessage[channel.MessageKey{Channel: "Telegram", ID: id}]; exists {
 			router.mu.Unlock()
 			t.Fatalf("mensagem mais antiga %d permaneceu na fila", id)
 		}

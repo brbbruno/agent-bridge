@@ -3,6 +3,8 @@ package daemon
 import (
 	"sort"
 	"time"
+
+	"github.com/brbbruno/agent-bridge/internal/channel"
 )
 
 const (
@@ -16,38 +18,41 @@ type lateMessageEntry struct {
 	createdAt time.Time
 }
 
-func (r *Router) addLateMessagesLocked(messageIDs []int64, session string, now time.Time) {
-	for _, messageID := range messageIDs {
-		if messageID != 0 {
-			r.lateMessage[messageID] = lateMessageEntry{sessionID: session, createdAt: now}
+func (r *Router) addLateMessagesLocked(messageKeys []channel.MessageKey, session string, now time.Time) {
+	for _, key := range messageKeys {
+		if key.ID != 0 {
+			r.lateMessage[key] = lateMessageEntry{sessionID: session, createdAt: now}
 		}
 	}
 	r.pruneLateMessagesLocked(now)
 }
 
 func (r *Router) pruneLateMessagesLocked(now time.Time) {
-	for messageID, entry := range r.lateMessage {
+	for key, entry := range r.lateMessage {
 		if now.Sub(entry.createdAt) > lateMessageLifetime {
-			delete(r.lateMessage, messageID)
+			delete(r.lateMessage, key)
 		}
 	}
 	if len(r.lateMessage) > lateMessageLimit {
 		type record struct {
-			messageID int64
+			key       channel.MessageKey
 			createdAt time.Time
 		}
 		records := make([]record, 0, len(r.lateMessage))
-		for messageID, entry := range r.lateMessage {
-			records = append(records, record{messageID: messageID, createdAt: entry.createdAt})
+		for key, entry := range r.lateMessage {
+			records = append(records, record{key: key, createdAt: entry.createdAt})
 		}
 		sort.Slice(records, func(i, j int) bool {
 			if records[i].createdAt.Equal(records[j].createdAt) {
-				return records[i].messageID < records[j].messageID
+				if records[i].key.Channel == records[j].key.Channel {
+					return records[i].key.ID < records[j].key.ID
+				}
+				return records[i].key.Channel < records[j].key.Channel
 			}
 			return records[i].createdAt.Before(records[j].createdAt)
 		})
 		for _, record := range records[:len(records)-lateMessageLimit] {
-			delete(r.lateMessage, record.messageID)
+			delete(r.lateMessage, record.key)
 		}
 	}
 	r.pruneSessionLabelsLocked()

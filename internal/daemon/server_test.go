@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/brbbruno/agent-bridge/internal/channel"
 	"github.com/brbbruno/agent-bridge/internal/channel/fake"
 	"github.com/brbbruno/agent-bridge/internal/config"
 	"github.com/brbbruno/agent-bridge/internal/logx"
@@ -18,7 +20,7 @@ func TestHTTPAuthAndEventEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.NotifyWhenPresent = false
 	cfg.Telegram.ChatID = 7
-	server, err := NewServer(t.TempDir(), cfg, "secret-test-token", fake.New(), logx.New(""))
+	server, err := NewServer(t.TempDir(), cfg, "secret-test-token", []channel.Channel{fake.New()}, logx.New(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +46,60 @@ func TestHTTPAuthAndEventEndpoint(t *testing.T) {
 	}
 	if result.Action != model.ActionNone {
 		t.Fatalf("away off deve ser não bloqueante: %+v", result)
+	}
+}
+
+func TestAdminTestBroadcastsToAllConfiguredChannels(t *testing.T) {
+	telegram := fake.New()
+	discord := fake.NewNamed("Discord", 2000)
+	server, err := NewServer(t.TempDir(), config.Default(), "test-token", []channel.Channel{telegram, discord}, logx.New(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/admin/test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(tokenHeader, "test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP=%d", resp.StatusCode)
+	}
+	telegramSent, _ := telegram.Snapshot()
+	discordSent, _ := discord.Snapshot()
+	if len(telegramSent) != 1 || !strings.Contains(telegramSent[0].Text, "Telegram funcionando") {
+		t.Fatalf("mensagem de teste Telegram=%+v", telegramSent)
+	}
+	if len(discordSent) != 1 || !strings.Contains(discordSent[0].Text, "Discord funcionando") {
+		t.Fatalf("mensagem de teste Discord=%+v", discordSent)
+	}
+}
+
+func TestAdminTestWithoutChannelsReturnsUnavailable(t *testing.T) {
+	server, err := NewServer(t.TempDir(), config.Default(), "test-token", nil, logx.New(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/admin/test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(tokenHeader, "test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("HTTP=%d; esperava 503", resp.StatusCode)
 	}
 }
 

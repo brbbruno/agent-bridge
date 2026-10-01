@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -23,12 +24,28 @@ func newTestRouter(t *testing.T, wait time.Duration) (*Router, *fakechannel.Fake
 	cfg.Telegram.ChatID = 123
 	cfg.MachineName = "PC-TESTE"
 	fake := fakechannel.New()
-	router, err := NewRouter(home, cfg, fake, logx.New(""))
+	router, err := NewRouter(home, cfg, []channel.Channel{fake}, logx.New(""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	router.SetAway(true)
 	return router, fake, home
+}
+
+func newMultiTestRouter(t *testing.T, wait time.Duration, channels ...channel.Channel) *Router {
+	t.Helper()
+	cfg := config.Default()
+	cfg.StopWait = wait
+	cfg.PermissionWait = wait
+	cfg.QuestionWait = wait
+	cfg.Telegram.ChatID = 123
+	cfg.MachineName = "PC-TESTE"
+	router, err := NewRouter(t.TempDir(), cfg, channels, logx.New(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router.SetAway(true)
+	return router
 }
 
 func event(kind model.EventType, session string) model.Event {
@@ -60,7 +77,7 @@ func TestReplyRoutesToPendingStop(t *testing.T) {
 	router, fake, _ := newTestRouter(t, time.Second)
 	result := runEvent(router, event(model.EventStop, "session-one"))
 	sent := waitForSent(t, fake, 1)
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, Text: "Agora responda com BANANA", ReplyToMessage: sent[0].ID})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, Text: "Agora responda com BANANA", ReplyToMessage: sent[0].ID})
 	got := <-result
 	if got.Action != model.ActionBlock || !strings.Contains(got.Reason, "BANANA") {
 		t.Fatalf("resolução=%+v", got)
@@ -74,7 +91,7 @@ func TestSingleWaitingSessionAcceptsPlainReply(t *testing.T) {
 	router, fake, _ := newTestRouter(t, time.Second)
 	result := runEvent(router, event(model.EventStop, "only-session"))
 	waitForSent(t, fake, 1)
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, Text: "CONTINUE"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, Text: "CONTINUE"})
 	got := <-result
 	if got.Action != model.ActionBlock || !strings.Contains(got.Reason, "CONTINUE") {
 		t.Fatalf("resolução=%+v", got)
@@ -92,7 +109,7 @@ func TestMultipleWaitingSessionsShowPickerAndRouteReply(t *testing.T) {
 	go func() { first <- router.HandleEvent(ctx1, event(model.EventStop, "session-a")) }()
 	go func() { second <- router.HandleEvent(ctx2, event(model.EventStop, "session-b")) }()
 	waitForSent(t, fake, 2)
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, Text: "Resposta roteada"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, Text: "Resposta roteada"})
 	sent := waitForSent(t, fake, 3)
 	if len(sent[2].Keyboard) != 2 || len(sent[2].Keyboard[0]) != 1 {
 		t.Fatalf("picker inválido: %+v", sent[2].Keyboard)
@@ -101,12 +118,12 @@ func TestMultipleWaitingSessionsShowPickerAndRouteReply(t *testing.T) {
 	if !strings.HasPrefix(selected, "r:") {
 		t.Fatalf("callback inesperado: %s", selected)
 	}
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "cb-route", CallbackData: selected})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "cb-route", CallbackData: selected})
 	sent = waitForSent(t, fake, 4)
 	if !sent[3].ForceReply {
 		t.Fatal("esperava ForceReply após escolher sessão")
 	}
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, Text: "BANANA", ReplyToMessage: sent[3].ID})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, Text: "BANANA", ReplyToMessage: sent[3].ID})
 	select {
 	case got := <-first:
 		if got.Action != model.ActionBlock || !strings.Contains(got.Reason, "BANANA") {
@@ -128,7 +145,7 @@ func TestLateReplyQueuedAndDeliveredAtNextStop(t *testing.T) {
 	if got := <-result; got.Action != model.ActionNone {
 		t.Fatalf("timeout deve deixar o agente encerrar: %+v", got)
 	}
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, Text: "continue depois", ReplyToMessage: sent[0].ID})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, Text: "continue depois", ReplyToMessage: sent[0].ID})
 	if persisted, err := loadState(home); err != nil || len(persisted.Queues["late-session"]) != 1 {
 		t.Fatalf("fila não persistida: %+v, err=%v", persisted, err)
 	}
@@ -150,12 +167,12 @@ func TestPermissionDenyWithInstructionAndQuestionOther(t *testing.T) {
 		t.Fatalf("resumo de permissão não está em bloco de código: %q", sent[0].Text)
 	}
 	instructionButton := sent[0].Keyboard[0][2]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "cb-deny", CallbackData: instructionButton.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "cb-deny", CallbackData: instructionButton.Data})
 	sent = waitForSent(t, fake, 2)
 	if !sent[1].ForceReply {
 		t.Fatal("esperava force reply para instrução de negação")
 	}
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, Text: "Use a pasta temp", ReplyToMessage: sent[1].ID})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, Text: "Use a pasta temp", ReplyToMessage: sent[1].ID})
 	permission := <-permissionResult
 	if permission.Action != model.ActionDeny || !strings.Contains(permission.Reason, "Use a pasta temp") {
 		t.Fatalf("permission=%+v", permission)
@@ -169,12 +186,12 @@ func TestPermissionDenyWithInstructionAndQuestionOther(t *testing.T) {
 		t.Fatalf("cabeçalho da pergunta não está em negrito: %q", sent[2].Text)
 	}
 	otherButton := sent[2].Keyboard[len(sent[2].Keyboard)-1][0]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "cb-other", CallbackData: otherButton.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "cb-other", CallbackData: otherButton.Data})
 	sent = waitForSent(t, fake, 4)
 	if !sent[3].ForceReply {
 		t.Fatal("Outro (texto) deve abrir ForceReply")
 	}
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, Text: "Roxo", ReplyToMessage: sent[3].ID})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, Text: "Roxo", ReplyToMessage: sent[3].ID})
 	question := <-questionResult
 	if question.Action != model.ActionBlock || !strings.Contains(question.Reason, "Roxo") || !strings.Contains(question.Reason, "não chame a ferramenta") {
 		t.Fatalf("question=%+v", question)
@@ -188,7 +205,7 @@ func TestQuestionMultiSelectAndDisconnectCancellation(t *testing.T) {
 	result := runEvent(router, questionEvent)
 	sent := waitForSent(t, fake, 1)
 	firstButton := sent[0].Keyboard[0][0]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "cb-toggle", CallbackData: firstButton.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "cb-toggle", CallbackData: firstButton.Data})
 	sent = waitForSent(t, fake, 1)
 	_, edits := fake.Snapshot()
 	if len(edits) == 0 || !strings.Contains(edits[0].Text, "**Frutas**\nEscolha") {
@@ -198,7 +215,7 @@ func TestQuestionMultiSelectAndDisconnectCancellation(t *testing.T) {
 	if confirm.Text != "Confirmar" {
 		t.Fatalf("botão de confirmação ausente: %+v", sent[0].Keyboard)
 	}
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "cb-confirm", CallbackData: confirm.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "cb-confirm", CallbackData: confirm.Data})
 	got := <-result
 	if got.Action != model.ActionBlock || !strings.Contains(got.Reason, "Um") {
 		t.Fatalf("resposta multi-select=%+v", got)
@@ -276,7 +293,7 @@ func TestHeaderFallsBackToFirstPrompt(t *testing.T) {
 		t.Fatalf("título do primeiro prompt inesperado: %q", got)
 	}
 
-	reloaded, err := NewRouter(home, router.cfg, fake, logx.New(""))
+	reloaded, err := NewRouter(home, router.cfg, []channel.Channel{fake}, logx.New(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,5 +357,178 @@ func TestAwayOffQuestionNotificationListsOptions(t *testing.T) {
 	}
 	if messages[0].Keyboard != nil {
 		t.Fatalf("teclado inesperado: %+v", messages[0].Keyboard)
+	}
+}
+
+func TestMultiChannelPermissionFirstAnswerWins(t *testing.T) {
+	telegram := fakechannel.New()
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, telegram, discord)
+	value := event(model.EventPermission, "permission-multi")
+	value.SessionTitle = "Aprovar comando"
+	result := runEvent(router, value)
+	telegramMessages := waitForSent(t, telegram, 1)
+	discordMessages := waitForSent(t, discord, 1)
+	wantSession := channel.SessionRef{ID: value.SessionID, Name: value.SessionName, Title: value.SessionTitle, Project: value.Project, Agent: string(value.Agent)}
+	if telegramMessages[0].Session != wantSession || discordMessages[0].Session != wantSession {
+		t.Fatalf("SessionRef Telegram=%+v Discord=%+v, esperado %+v", telegramMessages[0].Session, discordMessages[0].Session, wantSession)
+	}
+	if len(telegramMessages[0].Keyboard) == 0 || len(discordMessages[0].Keyboard) == 0 {
+		t.Fatal("aprovação não foi enviada com botões aos dois canais")
+	}
+	approve := discordMessages[0].Keyboard[0][0]
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Discord", CallbackID: "discord-approve", CallbackData: approve.Data})
+	if got := <-result; got.Action != model.ActionApprove {
+		t.Fatalf("resolução=%+v", got)
+	}
+	_, telegramEdits := telegram.Snapshot()
+	foundStatus := false
+	for _, edit := range telegramEdits {
+		if strings.Contains(edit.Text, "Aprovado pelo usuário via Discord") {
+			foundStatus = true
+		}
+	}
+	if !foundStatus {
+		t.Fatalf("mensagem do Telegram sem status de origem Discord: %+v", telegramEdits)
+	}
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", CallbackID: "telegram-late", CallbackData: telegramMessages[0].Keyboard[0][0].Data})
+	_, callbackTexts := telegram.CallbackSnapshot()
+	if len(callbackTexts) == 0 || callbackTexts[len(callbackTexts)-1] != "Esta decisão expirou." {
+		t.Fatalf("clique tardio não expirou: %v", callbackTexts)
+	}
+	select {
+	case extra := <-result:
+		t.Fatalf("segunda resolução inesperada: %+v", extra)
+	default:
+	}
+}
+
+func TestMultiChannelQuestionRequestsTextOnlyFromOrigin(t *testing.T) {
+	telegram := fakechannel.New()
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, telegram, discord)
+	value := event(model.EventQuestion, "question-multi")
+	value.Questions = []model.Question{{Text: "Qual cor?", Options: []model.Option{{Label: "Azul"}, {Label: "Verde"}}}}
+	result := runEvent(router, value)
+	waitForSent(t, telegram, 1)
+	discordMessages := waitForSent(t, discord, 1)
+	other := discordMessages[0].Keyboard[len(discordMessages[0].Keyboard)-1][0]
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Discord", CallbackID: "discord-other", CallbackData: other.Data})
+	discordRequests, _ := discord.Snapshot()
+	var token string
+	for _, request := range discordRequests {
+		if request.TextRequest {
+			token = request.Token
+			if request.Text != "Outro (texto) — responda à pergunta: Qual cor?" {
+				t.Fatalf("modal com prompt inesperado: %+v", request)
+			}
+		}
+	}
+	if token != "t:"+strings.Split(other.Data, ":")[1] {
+		t.Fatalf("token de texto=%q, callback=%q", token, other.Data)
+	}
+	telegramMessages, _ := telegram.Snapshot()
+	for _, message := range telegramMessages {
+		if message.TextRequest {
+			t.Fatalf("RequestText também enviado ao Telegram: %+v", message)
+		}
+	}
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Discord", TextToken: token, Text: "Roxo"})
+	got := <-result
+	if got.Action != model.ActionBlock || !strings.Contains(got.Reason, "Roxo") {
+		t.Fatalf("resposta via token=%+v", got)
+	}
+}
+
+func TestEditPendingUsesEachChannelMessageLimit(t *testing.T) {
+	telegram := fakechannel.New()
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, telegram, discord)
+	value := event(model.EventStop, "channel-limits")
+	prefix := router.header(value) + "\n"
+	value.Message = strings.Repeat("x", 3950-len([]rune(prefix)))
+	result := runEvent(router, value)
+	telegramMessages := waitForSent(t, telegram, 1)
+	discordMessages := waitForSent(t, discord, 2)
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Discord", ReplyToMessage: discordMessages[0].ID, Text: "continue"})
+	if got := <-result; got.Action != model.ActionBlock {
+		t.Fatalf("resolução=%+v", got)
+	}
+	_, telegramEdits := telegram.Snapshot()
+	if len(telegramEdits) != 1 || !strings.Contains(telegramEdits[0].Text, "Resposta recebida via Discord") {
+		t.Fatalf("Telegram deveria editar a mensagem dentro do próprio limite: %+v", telegramEdits)
+	}
+	discordMessages, _ = discord.Snapshot()
+	if len(discordMessages) != 3 || discordMessages[2].ReplyTo != discordMessages[1].ID || !strings.Contains(discordMessages[2].Text, "Resposta recebida via Discord") {
+		t.Fatalf("Discord deveria enviar status vinculado ao segmento final: %+v", discordMessages)
+	}
+	if len(telegramMessages) != 1 {
+		t.Fatalf("quantidade de mensagens Telegram=%d", len(telegramMessages))
+	}
+}
+
+func TestSessionThreadRoutesPendingAndLateRepliesToOrigin(t *testing.T) {
+	telegram := fakechannel.New()
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, telegram, discord)
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Discord", SessionID: "late-session", Text: "responda depois"})
+	discordMessages := waitForSent(t, discord, 1)
+	if discordMessages[0].Session.ID != "late-session" || !strings.Contains(discordMessages[0].Text, "Enfileirado") {
+		t.Fatalf("resposta tardia não foi enviada à thread de origem: %+v", discordMessages[0])
+	}
+	if messages, _ := telegram.Snapshot(); len(messages) != 0 {
+		t.Fatalf("resposta tardia também enviada ao Telegram: %+v", messages)
+	}
+
+	result := runEvent(router, event(model.EventStop, "waiting-session"))
+	waitForSent(t, telegram, 1)
+	waitForSent(t, discord, 2)
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Discord", SessionID: "waiting-session", Text: "continue"})
+	got := <-result
+	if got.Action != model.ActionBlock || !strings.Contains(got.Reason, mobilePrefix+"continue") {
+		t.Fatalf("resposta da thread não resolveu Stop como esperado: %+v", got)
+	}
+}
+
+func TestMultiChannelSendFailureIsFailOpenOnlyWhenAllFail(t *testing.T) {
+	telegram := fakechannel.New()
+	telegram.SendError = errors.New("Telegram indisponível")
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, telegram, discord)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan model.Resolution, 1)
+	go func() { result <- router.HandleEvent(ctx, event(model.EventStop, "one-channel-fails")) }()
+	waitForSent(t, discord, 1)
+	cancel()
+	if got := <-result; got.Action != model.ActionNone {
+		t.Fatalf("cancelamento após entrega parcial=%+v", got)
+	}
+
+	telegramAllFail := fakechannel.New()
+	discordAllFail := fakechannel.NewNamed("Discord", 2000)
+	telegramAllFail.SendError = errors.New("Telegram indisponível")
+	discordAllFail.SendError = errors.New("Discord indisponível")
+	routerAllFail := newMultiTestRouter(t, time.Second, telegramAllFail, discordAllFail)
+	if got := routerAllFail.HandleEvent(context.Background(), event(model.EventStop, "all-channels-fail")); got.Action != model.ActionNone {
+		t.Fatalf("falha de todos os canais não liberou o hook: %+v", got)
+	}
+}
+
+func TestUnknownChannelUpdateIsIgnored(t *testing.T) {
+	telegram := fakechannel.New()
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, telegram, discord)
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Unknown", SessionID: "ignored-session", Text: "não enfileirar"})
+	if sent, _ := telegram.Snapshot(); len(sent) != 0 {
+		t.Fatalf("update desconhecido enviou ao Telegram: %+v", sent)
+	}
+	if sent, _ := discord.Snapshot(); len(sent) != 0 {
+		t.Fatalf("update desconhecido enviou ao Discord: %+v", sent)
+	}
+	router.mu.Lock()
+	queued := len(router.state.Queues["ignored-session"])
+	router.mu.Unlock()
+	if queued != 0 {
+		t.Fatalf("update desconhecido foi enfileirado: %d", queued)
 	}
 }

@@ -15,7 +15,7 @@ func TestStopResolutionKeepsOriginalMessage(t *testing.T) {
 	router, bot, _ := newTestRouter(t, time.Second)
 	result := runEvent(router, event(model.EventStop, "preserve-stop"))
 	sent := waitForSent(t, bot, 1)[0]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, ReplyToMessage: sent.ID, Text: "Continue"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, ReplyToMessage: sent.ID, Text: "Continue"})
 	if got := <-result; got.Action != model.ActionBlock {
 		t.Fatalf("resolução=%+v", got)
 	}
@@ -29,7 +29,7 @@ func TestQuestionResolutionKeepsQuestionAndAnswer(t *testing.T) {
 	result := runEvent(router, question)
 	sent := waitForSent(t, bot, 1)[0]
 	button := sent.Keyboard[1][0]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "answer-green", CallbackData: button.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "answer-green", CallbackData: button.Data})
 	if got := <-result; got.Action != model.ActionBlock {
 		t.Fatalf("resolução=%+v", got)
 	}
@@ -43,7 +43,7 @@ func TestLongStopUsesReplyStatusWithoutReplacingChunks(t *testing.T) {
 	value.Message = strings.Repeat("x", 3*channel.MaxMessageRunes-40-len([]rune(prefix)))
 	result := runEvent(router, value)
 	sent := waitForSent(t, bot, 3)
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, ReplyToMessage: sent[0].ID, Text: "Continue"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, ReplyToMessage: sent[0].ID, Text: "Continue"})
 	if got := <-result; got.Action != model.ActionBlock {
 		t.Fatalf("resolução=%+v", got)
 	}
@@ -69,12 +69,12 @@ func TestLongPermissionInstructionKeepsTextAndRemovesOnlyMarkup(t *testing.T) {
 	sent := waitForSent(t, bot, 3)
 	lastOriginal := sent[2]
 	instructionButton := lastOriginal.Keyboard[0][2]
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "deny-instruct", CallbackData: instructionButton.Data})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "deny-instruct", CallbackData: instructionButton.Data})
 	sent = waitForSent(t, bot, 4)
 	if !sent[3].ForceReply {
 		t.Fatal("instrução de negação não usou ForceReply")
 	}
-	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, ReplyToMessage: sent[3].ID, Text: "Não execute"})
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, ReplyToMessage: sent[3].ID, Text: "Não execute"})
 	if got := <-result; got.Action != model.ActionDeny {
 		t.Fatalf("resolução=%+v", got)
 	}
