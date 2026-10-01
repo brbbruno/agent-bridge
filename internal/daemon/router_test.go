@@ -248,3 +248,42 @@ func TestAwayOffStopSendsNotificationWithoutBlocking(t *testing.T) {
 		t.Fatalf("notificação ausente ou truncada: %+v", messages[0])
 	}
 }
+
+func TestAwayOffQuestionNotificationListsOptions(t *testing.T) {
+	router, fake, _ := newTestRouter(t, time.Second)
+	router.SetAway(false)
+	value := event(model.EventQuestion, "present-question")
+	value.ToolName = "ask_user_question"
+	value.Questions = []model.Question{
+		{
+			Text:   "Qual resposta?",
+			Header: "Selecao",
+			Options: []model.Option{
+				{Label: "Sim", Description: "ok"},
+				{Label: "Nao"},
+			},
+		},
+		{
+			Text:        "Quais frutas?",
+			MultiSelect: true,
+			Options: []model.Option{
+				{Label: "Maca"},
+				{Label: "Banana"},
+			},
+		},
+	}
+	got := router.HandleEvent(context.Background(), value)
+	if got.Action != model.ActionNone {
+		t.Fatalf("modo presente bloqueou o agente: %+v", got)
+	}
+	messages := waitForSent(t, fake, 1)
+	text := messages[0].Text
+	for _, want := range []string{"Selecao: ", "- Sim — ok", "- Nao", "- Maca", "- Banana", "(múltipla escolha)", "/away"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("notificação sem %q: %q", want, text)
+		}
+	}
+	if messages[0].Keyboard != nil {
+		t.Fatalf("teclado inesperado: %+v", messages[0].Keyboard)
+	}
+}

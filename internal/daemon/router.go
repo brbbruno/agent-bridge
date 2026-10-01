@@ -236,8 +236,22 @@ func (r *Router) notifyPresent(event model.Event) {
 		}
 	case model.EventQuestion:
 		for index, question := range event.Questions {
-			text += fmt.Sprintf("\n%d. %s", index+1, question.Text)
+			header := ""
+			if question.Header != "" {
+				header = question.Header + ": "
+			}
+			text += fmt.Sprintf("\n%d. %s%s", index+1, header, question.Text)
+			for _, option := range question.Options {
+				text += "\n   - " + option.Label
+				if option.Description != "" {
+					text += " — " + option.Description
+				}
+			}
+			if question.MultiSelect {
+				text += "\n   (múltipla escolha)"
+			}
 		}
+		text += "\nResponda no computador ou ative o modo ausente (/away) para responder pelo celular com botões."
 	default:
 		return
 	}
