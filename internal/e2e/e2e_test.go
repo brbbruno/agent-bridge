@@ -142,7 +142,7 @@ func TestDevinTwoWayE2E(t *testing.T) {
 	var stopMu sync.Mutex
 	stopReplies := map[string]int{}
 	fake.SetResponder(func(message fakeMessage) {
-		if !strings.HasPrefix(message.Text, "Devin ·") || len(message.Keyboard) > 0 || message.ForceReply {
+		if !strings.HasPrefix(message.Text, "<b>Devin ·") || message.ParseMode != "HTML" || len(message.Keyboard) > 0 || message.ForceReply {
 			return
 		}
 		header := sessionKey(message.Text)
@@ -156,7 +156,7 @@ func TestDevinTwoWayE2E(t *testing.T) {
 	})
 	resultA := startDevin(t, devinExe, project, home, "Responda com uma frase curta e encerre o turno.")
 	stopMessage, ok := fake.WaitSend(time.Now().Add(90*time.Second), func(message fakeMessage) bool {
-		return strings.HasPrefix(message.Text, "Devin ·") && len(message.Keyboard) == 0
+		return strings.HasPrefix(message.Text, "<b>Devin ·") && message.ParseMode == "HTML" && len(message.Keyboard) == 0
 	})
 	if !ok {
 		t.Fatalf("E2E A: nenhum Stop enviado ao Telegram; artefatos: %s", artifactRoot)
@@ -308,7 +308,7 @@ func TestDevinTwoWayE2E(t *testing.T) {
 		t.Fatalf("E2E D: enviar prompt inicial: %v", err)
 	}
 	lateStop, ok := fake.WaitSend(time.Now().Add(90*time.Second), func(message fakeMessage) bool {
-		return strings.HasPrefix(message.Text, "Devin ·") && len(message.Keyboard) == 0
+		return strings.HasPrefix(message.Text, "<b>Devin ·") && message.ParseMode == "HTML" && len(message.Keyboard) == 0
 	})
 	if !ok {
 		writeArtifact(t, artifactRoot, "scenario-d-no-stop.txt", []byte(interactive.Output()))
@@ -542,7 +542,7 @@ func stopOnceResponder(fake *fakeBot, reply string) func(fakeMessage) {
 	var mu sync.Mutex
 	answered := map[string]bool{}
 	return func(message fakeMessage) {
-		if !strings.HasPrefix(message.Text, "Devin ·") || len(message.Keyboard) > 0 || message.ForceReply {
+		if !strings.HasPrefix(message.Text, "<b>Devin ·") || message.ParseMode != "HTML" || len(message.Keyboard) > 0 || message.ForceReply {
 			return
 		}
 		header := sessionKey(message.Text)
@@ -569,6 +569,13 @@ func sessionKey(text string) string {
 	return line
 }
 
+func TestSessionKeyExtractsIDWithTitle(t *testing.T) {
+	text := "<b>Devin · PC · demo</b>\nSessão: Título da tarefa (session-id)\n\nCorpo"
+	if got := sessionKey(text); got != "session-id" {
+		t.Fatalf("chave da sessão=%q", got)
+	}
+}
+
 func assertFakeEditPreserves(t *testing.T, fake *fakeBot, messageID int64, original, expected string) {
 	t.Helper()
 	edit, ok := fake.WaitEdit(time.Now().Add(10*time.Second), func(edit map[string]any) bool {
@@ -579,8 +586,9 @@ func assertFakeEditPreserves(t *testing.T, fake *fakeBot, messageID int64, origi
 		t.Fatalf("edição da mensagem %d não chegou ao bot fake", messageID)
 	}
 	text, _ := edit["text"].(string)
-	if !strings.Contains(text, original) || !strings.Contains(text, expected) {
-		t.Fatalf("edição não preservou o original %q ou status %q: %q", original, expected, text)
+	parseMode, _ := edit["parse_mode"].(string)
+	if parseMode != "HTML" || !strings.Contains(text, original) || !strings.Contains(text, expected) {
+		t.Fatalf("edição não preservou o original %q ou status %q em HTML: %q (parse_mode=%q)", original, expected, text, parseMode)
 	}
 }
 

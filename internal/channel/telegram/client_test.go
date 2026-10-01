@@ -173,3 +173,142 @@ func TestTelegramErrorsNeverExposeToken(t *testing.T) {
 		t.Fatalf("erro ausente ou expôs token: %v", err)
 	}
 }
+
+func TestSendRendersHTMLAndKeepsSourceChunks(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 7}})
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	source := "**bold** & <tag>"
+	message, err := client.Send(context.Background(), source, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request["text"] != "<b>bold</b> &amp; &lt;tag&gt;" || request["parse_mode"] != "HTML" {
+		t.Fatalf("request não renderizado em HTML: %+v", request)
+	}
+	if len(message.Chunks) != 1 || message.Chunks[0] != source {
+		t.Fatalf("chunks não preservaram o Markdown de origem: %+v", message.Chunks)
+	}
+}
+
+func TestSendRetriesWithoutHTMLWhenTelegramCannotParseEntities(t *testing.T) {
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, request)
+		if len(requests) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "description": "Bad Request: can't parse entities: malformed tag"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 12}})
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	source := "**bold**"
+	message, err := client.Send(context.Background(), source, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0]["text"] != "<b>bold</b>" || requests[0]["parse_mode"] != "HTML" {
+		t.Fatalf("primeira tentativa inesperada: %+v", requests)
+	}
+	if requests[1]["text"] != source || requests[1]["parse_mode"] != nil {
+		t.Fatalf("fallback não enviou Markdown simples: %+v", requests[1])
+	}
+	if len(message.Chunks) != 1 || message.Chunks[0] != source {
+		t.Fatalf("chunks não preservaram a origem no fallback: %+v", message.Chunks)
+	}
+}
+
+func TestEditRetriesWithoutHTMLWhenTelegramCannotParseEntities(t *testing.T) {
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, request)
+		if len(requests) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "description": "Bad Request: can't parse entities: malformed tag"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": true})
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	if err := client.Edit(context.Background(), 42, "**bold**", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0]["parse_mode"] != "HTML" || requests[1]["parse_mode"] != nil || requests[1]["text"] != "**bold**" {
+		t.Fatalf("tentativas de edição inesperadas: %+v", requests)
+	}
+}
+
+func TestEditTreatsUnchangedMessagesAsSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "description": "Bad Request: message is not modified"})
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	if err := client.Edit(context.Background(), 42, "same", nil); err != nil {
+		t.Fatalf("Edit retornou erro para mensagem sem alteração: %v", err)
+	}
+	if err := client.EditReplyMarkup(context.Background(), 42, nil); err != nil {
+		t.Fatalf("EditReplyMarkup retornou erro para markup sem alteração: %v", err)
+	}
+}
+
+func TestSplitTextKeepsFencedCodeValidAcrossChunks(t *testing.T) {
+	text := "```go\n" + strings.Repeat("x", 100)
+	chunks := SplitText(text, 50)
+	if len(chunks) < 2 {
+		t.Fatalf("esperava múltiplos chunks: %d", len(chunks))
+	}
+	if !strings.HasSuffix(chunks[0], "\n```") {
+		t.Fatalf("primeiro chunk não fechou o fence: %q", chunks[0])
+	}
+	if !strings.HasPrefix(chunks[1], "```go\n") {
+		t.Fatalf("segundo chunk não reabriu o fence: %q", chunks[1])
+	}
+	for index, chunk := range chunks {
+		if got := len([]rune(chunk)); got > 50 {
+			t.Fatalf("chunk %d excedeu limite: %d", index, got)
+		}
+	}
+}
+
+func TestSplitTextReopensIndentedFenceAcrossChunks(t *testing.T) {
+	opening := "   ```go\n"
+	text := opening + "   " + strings.Repeat("x", 100)
+	chunks := SplitText(text, 50)
+	if len(chunks) < 2 {
+		t.Fatalf("esperava múltiplos chunks: %d", len(chunks))
+	}
+	if !strings.HasSuffix(chunks[0], "\n```") {
+		t.Fatalf("primeiro chunk não fechou o fence: %q", chunks[0])
+	}
+	if !strings.HasPrefix(chunks[1], opening) {
+		t.Fatalf("segundo chunk não reabriu o fence indentado: %q", chunks[1])
+	}
+	for index, chunk := range chunks {
+		if got := len([]rune(chunk)); got > 50 {
+			t.Fatalf("chunk %d excedeu limite: %d", index, got)
+		}
+	}
+}

@@ -19,6 +19,7 @@ type fakeMessage struct {
 	ID         int64
 	ChatID     int64
 	Text       string
+	ParseMode  string
 	Keyboard   [][]fakeButton
 	ForceReply bool
 }
@@ -49,9 +50,10 @@ func (f *fakeBot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeFakeJSON(w, map[string]any{"ok": true, "result": map[string]any{"id": 123, "is_bot": true, "first_name": "Bridge", "username": "agent_bridge_fake_bot"}})
 	case "sendMessage":
 		var request struct {
-			ChatID int64  `json:"chat_id"`
-			Text   string `json:"text"`
-			Markup struct {
+			ChatID    int64  `json:"chat_id"`
+			Text      string `json:"text"`
+			ParseMode string `json:"parse_mode"`
+			Markup    struct {
 				InlineKeyboard [][]fakeButton `json:"inline_keyboard"`
 				ForceReply     bool           `json:"force_reply"`
 			} `json:"reply_markup"`
@@ -62,7 +64,7 @@ func (f *fakeBot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		f.nextMsg++
-		message := fakeMessage{ID: f.nextMsg, ChatID: request.ChatID, Text: request.Text, Keyboard: request.Markup.InlineKeyboard, ForceReply: request.Markup.ForceReply}
+		message := fakeMessage{ID: f.nextMsg, ChatID: request.ChatID, Text: request.Text, ParseMode: request.ParseMode, Keyboard: request.Markup.InlineKeyboard, ForceReply: request.Markup.ForceReply}
 		f.messages = append(f.messages, message)
 		responder := f.responder
 		f.mu.Unlock()

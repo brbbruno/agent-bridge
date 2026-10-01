@@ -219,7 +219,7 @@ func (r *Router) waitForUser(ctx context.Context, event model.Event) model.Resol
 		case model.EventPermission:
 			text += "Precisa de aprovação: " + event.ToolName
 			if event.ToolSummary != "" {
-				text += "\n" + event.ToolSummary
+				text += "\n```\n" + event.ToolSummary + "\n```"
 			}
 		}
 		keyboard := channel.Keyboard(nil)
@@ -280,7 +280,7 @@ func (r *Router) notifyPresent(event model.Event) {
 	case model.EventPermission:
 		text += "\nPrecisa de aprovação: " + event.ToolName
 		if event.ToolSummary != "" {
-			text += "\n" + event.ToolSummary
+			text += "\n```\n" + event.ToolSummary + "\n```"
 		}
 	case model.EventQuestion:
 		for index, question := range event.Questions {
@@ -442,6 +442,10 @@ func (r *Router) handleQuestionCallback(ctx context.Context, update channel.Upda
 	}
 	allDone := allQuestionsDone(p.questions)
 	updatedKeyboard := questionKeyboard(id, questionIndex, question, progress.selected)
+	selected := make(map[int]bool, len(progress.selected))
+	for index, isSelected := range progress.selected {
+		selected[index] = isSelected
+	}
 	messageID := progress.message
 	event := p.event
 	questions := append([]model.Question(nil), p.event.Questions...)
@@ -449,7 +453,8 @@ func (r *Router) handleQuestionCallback(ctx context.Context, update channel.Upda
 	r.mu.Unlock()
 	_ = r.channel.AnswerCallback(ctx, update.CallbackID, "Resposta registrada.")
 	if !allDone && messageID != 0 {
-		if err := r.channel.Edit(ctx, messageID, r.header(event)+"\n"+question.Header+"\n"+question.Text, updatedKeyboard); err != nil {
+		text, _ := r.questionPrompt(event, id, questionIndex, selected)
+		if err := r.channel.Edit(ctx, messageID, text, updatedKeyboard); err != nil {
 			r.logger.Errorf("atualizar opções de pergunta: %v", err)
 		}
 	}
@@ -925,16 +930,16 @@ func (r *Router) headerLocked(event model.Event) string {
 		title = strings.TrimSpace(r.state.SessionTitles[event.SessionID].Title)
 	}
 	if title != "" {
-		return fmt.Sprintf("%s\nSessão: %s (%s)", header, title, event.SessionName)
+		return fmt.Sprintf("**%s**\nSessão: %s (%s)\n", header, title, event.SessionName)
 	}
-	return fmt.Sprintf("%s\nSessão: %s", header, event.SessionName)
+	return fmt.Sprintf("**%s**\nSessão: %s\n", header, event.SessionName)
 }
 
 func (r *Router) questionPrompt(event model.Event, id string, index int, selected map[int]bool) (string, channel.Keyboard) {
 	question := event.Questions[index]
 	text := r.header(event) + "\n"
 	if question.Header != "" {
-		text += question.Header + "\n"
+		text += "**" + question.Header + "**\n"
 	}
 	text += question.Text
 	return text, questionKeyboard(id, index, question, selected)

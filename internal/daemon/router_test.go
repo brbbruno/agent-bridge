@@ -146,6 +146,9 @@ func TestPermissionDenyWithInstructionAndQuestionOther(t *testing.T) {
 	router, fake, _ := newTestRouter(t, time.Second)
 	permissionResult := runEvent(router, event(model.EventPermission, "permission-session"))
 	sent := waitForSent(t, fake, 1)
+	if !strings.Contains(sent[0].Text, "\n```\necho ok\n```") {
+		t.Fatalf("resumo de permissão não está em bloco de código: %q", sent[0].Text)
+	}
 	instructionButton := sent[0].Keyboard[0][2]
 	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "cb-deny", CallbackData: instructionButton.Data})
 	sent = waitForSent(t, fake, 2)
@@ -159,9 +162,12 @@ func TestPermissionDenyWithInstructionAndQuestionOther(t *testing.T) {
 	}
 
 	questionEvent := event(model.EventQuestion, "question-session")
-	questionEvent.Questions = []model.Question{{Text: "Qual cor?", Options: []model.Option{{Label: "Azul"}, {Label: "Verde"}}}}
+	questionEvent.Questions = []model.Question{{Header: "Cor", Text: "Qual cor?", Options: []model.Option{{Label: "Azul"}, {Label: "Verde"}}}}
 	questionResult := runEvent(router, questionEvent)
 	sent = waitForSent(t, fake, 3)
+	if !strings.Contains(sent[2].Text, "**Cor**\nQual cor?") {
+		t.Fatalf("cabeçalho da pergunta não está em negrito: %q", sent[2].Text)
+	}
 	otherButton := sent[2].Keyboard[len(sent[2].Keyboard)-1][0]
 	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "cb-other", CallbackData: otherButton.Data})
 	sent = waitForSent(t, fake, 4)
@@ -178,12 +184,16 @@ func TestPermissionDenyWithInstructionAndQuestionOther(t *testing.T) {
 func TestQuestionMultiSelectAndDisconnectCancellation(t *testing.T) {
 	router, fake, _ := newTestRouter(t, time.Second)
 	questionEvent := event(model.EventQuestion, "multi-session")
-	questionEvent.Questions = []model.Question{{Text: "Escolha", MultiSelect: true, Options: []model.Option{{Label: "Um"}, {Label: "Dois"}}}}
+	questionEvent.Questions = []model.Question{{Header: "Frutas", Text: "Escolha", MultiSelect: true, Options: []model.Option{{Label: "Um"}, {Label: "Dois"}}}}
 	result := runEvent(router, questionEvent)
 	sent := waitForSent(t, fake, 1)
 	firstButton := sent[0].Keyboard[0][0]
 	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, CallbackID: "cb-toggle", CallbackData: firstButton.Data})
 	sent = waitForSent(t, fake, 1)
+	_, edits := fake.Snapshot()
+	if len(edits) == 0 || !strings.Contains(edits[0].Text, "**Frutas**\nEscolha") {
+		t.Fatalf("edição da pergunta não reutilizou o texto formatado: %+v", edits)
+	}
 	confirm := sent[0].Keyboard[len(sent[0].Keyboard)-1][0]
 	if confirm.Text != "Confirmar" {
 		t.Fatalf("botão de confirmação ausente: %+v", sent[0].Keyboard)
@@ -202,7 +212,7 @@ func TestQuestionMultiSelectAndDisconnectCancellation(t *testing.T) {
 	if got := <-cancelResult; got.Action != model.ActionNone {
 		t.Fatalf("disconnect deveria falhar aberto: %+v", got)
 	}
-	_, edits := fake.Snapshot()
+	_, edits = fake.Snapshot()
 	found := false
 	for _, edit := range edits {
 		if strings.Contains(strings.ToLower(edit.Text), "cancelado") {
@@ -238,12 +248,12 @@ func TestPermissionTimeoutFallsBackWithoutDecision(t *testing.T) {
 func TestHeaderShowsMachineAndSessionTitle(t *testing.T) {
 	router, _, _ := newTestRouter(t, time.Second)
 	value := model.Event{Agent: model.AgentDevin, Project: "demo", SessionName: "possible-celestite", SessionTitle: "Corrigir login"}
-	want := "Devin · PC-TESTE · demo\nSessão: Corrigir login (possible-celestite)"
+	want := "**Devin · PC-TESTE · demo**\nSessão: Corrigir login (possible-celestite)\n"
 	if got := router.header(value); got != want {
 		t.Fatalf("cabeçalho=%q; esperado %q", got, want)
 	}
 	value.SessionTitle = ""
-	want = "Devin · PC-TESTE · demo\nSessão: possible-celestite"
+	want = "**Devin · PC-TESTE · demo**\nSessão: possible-celestite\n"
 	if got := router.header(value); got != want {
 		t.Fatalf("cabeçalho sem título=%q; esperado %q", got, want)
 	}
@@ -274,7 +284,7 @@ func TestHeaderFallsBackToFirstPrompt(t *testing.T) {
 		t.Fatalf("título de sessão não persistido: %q", got)
 	}
 	reloaded.HandleEvent(context.Background(), model.Event{Type: model.EventSessionEnd, SessionID: "S"})
-	if got := reloaded.header(stop); got != "Devin · PC-TESTE · demo\nSessão: S" {
+	if got := reloaded.header(stop); got != "**Devin · PC-TESTE · demo**\nSessão: S\n" {
 		t.Fatalf("título não removido no fim da sessão: %q", got)
 	}
 }
