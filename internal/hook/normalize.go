@@ -53,6 +53,7 @@ func Parse(kind model.EventType, agent model.Agent, env map[string]string, data 
 		Type:        kind,
 		SessionID:   sessionID,
 		SessionName: shortSessionName(sessionID),
+		TurnID:      stringValue(payload["prompt_id"]),
 		Project:     project,
 		CWD:         cwd,
 		ToolName:    toolName,
@@ -76,6 +77,13 @@ func Parse(kind model.EventType, agent model.Agent, env map[string]string, data 
 		event.Prompt = stringValue(payload["prompt"])
 	case model.EventSessionEnd:
 		event.Message = stringValue(payload["reason"])
+	case model.EventProgress:
+		event.ToolSummary = summarizeProgressTool(toolInput)
+		if response, ok := payload["tool_response"].(map[string]any); ok {
+			if success, exists := response["success"].(bool); exists {
+				event.ToolFailed = !success
+			}
+		}
 	default:
 		return model.Event{}, fmt.Errorf("tipo de evento inválido: %s", kind)
 	}
@@ -119,6 +127,35 @@ func parseQuestions(value any) []model.Question {
 		questions = append(questions, question)
 	}
 	return questions
+}
+
+func summarizeProgressTool(input map[string]any) string {
+	if command := stringValue(input["command"]); strings.TrimSpace(command) != "" {
+		firstLine := strings.TrimSpace(strings.SplitN(command, "\n", 2)[0])
+		return truncateSummary(firstLine, 120)
+	}
+	for _, key := range []string{"file_path", "path", "notebook_path"} {
+		if path := strings.TrimSpace(stringValue(input[key])); path != "" {
+			return baseName(path)
+		}
+	}
+	for _, key := range []string{"pattern", "query", "url"} {
+		if value := strings.TrimSpace(stringValue(input[key])); value != "" {
+			return truncateSummary(value, 60)
+		}
+	}
+	return ""
+}
+
+func truncateSummary(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	if limit <= 0 {
+		return ""
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func summarizeTool(name string, input map[string]any) string {

@@ -57,8 +57,8 @@ func TestMergeIdempotencyBackupAndUninstallFourTargets(t *testing.T) {
 				t.Fatal(err)
 			}
 			count, own := countOwned(t, installed)
-			if count != 5 {
-				t.Fatalf("hooks próprios=%d; esperava 5", count)
+			if count != 6 {
+				t.Fatalf("hooks próprios=%d; esperava 6", count)
 			}
 			if !strings.Contains(own, " hook stop --agent "+test.agent) {
 				t.Fatalf("comando sem subcomando/agent: %s", own)
@@ -70,8 +70,8 @@ func TestMergeIdempotencyBackupAndUninstallFourTargets(t *testing.T) {
 			if !strings.Contains(own, `"matcher": "`+questionMatcher+`"`) {
 				t.Fatalf("matcher de pergunta incorreto: %s", own)
 			}
-			if !strings.Contains(own, `"timeout": 1920`) || !strings.Contains(own, `"timeout": 720`) {
-				t.Fatalf("timeouts de hooks incorretos: %s", own)
+			if !strings.Contains(own, `"timeout": 1920`) || !strings.Contains(own, `"timeout": 720`) || !strings.Contains(own, `"timeout": 10`) || !strings.Contains(own, `"PostToolUse"`) {
+				t.Fatalf("timeouts ou evento PostToolUse incorretos: %s", own)
 			}
 			if runtime.GOOS == "windows" && !strings.Contains(own, "C:/") {
 				t.Fatalf("comando Windows deve usar barras: %s", own)
@@ -85,7 +85,7 @@ func TestMergeIdempotencyBackupAndUninstallFourTargets(t *testing.T) {
 			}
 			installedAgain, _ := os.ReadFile(path)
 			count, _ = countOwned(t, installedAgain)
-			if count != 5 {
+			if count != 6 {
 				t.Fatalf("instalação repetida duplicou hooks: %d", count)
 			}
 			removed, err := Uninstall(options)

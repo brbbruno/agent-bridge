@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/brbbruno/agent-bridge/internal/channel"
@@ -31,6 +32,9 @@ type Fake struct {
 	nextID        int64
 	name          string
 	limit         int
+	Progress      bool
+	BlockSend     <-chan struct{}
+	SendStarted   chan struct{}
 	SendError     error
 	Sent          []SentRecord
 	Edits         []EditRecord
@@ -49,12 +53,14 @@ func NewNamed(name string, limit int) *Fake {
 	if limit <= 0 {
 		limit = channel.MaxMessageRunes
 	}
-	return &Fake{name: name, limit: limit, UpdatesCh: make(chan channel.Update, 32)}
+	return &Fake{name: name, limit: limit, Progress: strings.EqualFold(name, "Discord"), UpdatesCh: make(chan channel.Update, 32)}
 }
 
 func (f *Fake) Name() string { return f.name }
 
 func (f *Fake) MessageLimit() int { return f.limit }
+
+func (f *Fake) SupportsProgress() bool { return f.Progress }
 
 func (f *Fake) Run(ctx context.Context, handle func(context.Context, channel.Update)) error {
 	if handle == nil {
@@ -73,7 +79,23 @@ func (f *Fake) Run(ctx context.Context, handle func(context.Context, channel.Upd
 	}
 }
 
-func (f *Fake) Send(_ context.Context, message channel.Outgoing) (channel.SentMessage, error) {
+func (f *Fake) Send(ctx context.Context, message channel.Outgoing) (channel.SentMessage, error) {
+	f.mu.Lock()
+	block, started := f.BlockSend, f.SendStarted
+	f.mu.Unlock()
+	if block != nil {
+		if started != nil {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+		}
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return channel.SentMessage{}, ctx.Err()
+		}
+	}
 	return f.send(message, false, false, "")
 }
 

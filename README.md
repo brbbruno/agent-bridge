@@ -30,6 +30,12 @@ go build -o agent-bridge ./cmd/agent-bridge
 
 Cada computador vincula seu daemon ao canal de sua escolha, por exemplo `#empresa` ou `#pessoal`. Cada sessão aparece em uma thread no canal vinculado. O usuário que vinculou o computador é o único autorizado a responder. Quando Telegram e Discord estão configurados juntos, as solicitações vão aos dois; a primeira resposta vence e as mensagens nos outros canais são atualizadas com a origem da resposta. Comandos disponíveis no Discord: `/away`, `/back`, `/status`, `/list` e `/vincular`.
 
+### Painel de andamento
+
+O Discord mostra um painel por turno na thread da sessão, com contagens de ferramentas e falhas. O painel aparece sempre, tanto no modo presente quanto no ausente; o Telegram não o recebe. Configure `progress_detail` em `config.json` como `resumido` (padrão) ou `completo`; a opção completa inclui comandos e nomes de arquivos, portanto evite usá-la em computadores da empresa.
+
+Execute `agent-bridge install` novamente para adicionar o hook `PostToolUse`, que atualiza o painel após cada ferramenta.
+
 O daemon começa automaticamente quando um hook precisa dele. Também pode ser controlado manualmente:
 
 ```sh

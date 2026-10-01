@@ -17,6 +17,7 @@ const (
 	EventQuestion   EventType = "question"
 	EventPrompt     EventType = "prompt"
 	EventSessionEnd EventType = "session-end"
+	EventProgress   EventType = "progress"
 )
 
 type Option struct {
@@ -37,6 +38,8 @@ type Event struct {
 	SessionID    string     `json:"session_id"`
 	SessionName  string     `json:"session_name"`
 	SessionTitle string     `json:"session_title,omitempty"`
+	TurnID       string     `json:"turn_id,omitempty"`
+	ToolFailed   bool       `json:"tool_failed,omitempty"`
 	Project      string     `json:"project"`
 	CWD          string     `json:"cwd,omitempty"`
 	Message      string     `json:"message,omitempty"`

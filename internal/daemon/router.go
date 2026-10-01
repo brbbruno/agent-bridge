@@ -45,22 +45,24 @@ type pending struct {
 }
 
 type Router struct {
-	mu            sync.Mutex
-	home          string
-	machine       string
-	cfg           config.Config
-	state         persistedState
-	channels      []channel.Channel
-	channelByName map[string]channel.Channel
-	logger        *logx.Logger
-	started       time.Time
-	pending       map[string]*pending
-	waiting       map[string]string
-	byMessage     map[channel.MessageKey]string
-	lateMessage   map[channel.MessageKey]lateMessageEntry
-	sessionLabels map[string]string
-	endedSessions map[string]time.Time
-	idCounter     uint64
+	mu               sync.Mutex
+	home             string
+	machine          string
+	cfg              config.Config
+	state            persistedState
+	channels         []channel.Channel
+	channelByName    map[string]channel.Channel
+	logger           *logx.Logger
+	started          time.Time
+	pending          map[string]*pending
+	waiting          map[string]string
+	byMessage        map[channel.MessageKey]string
+	lateMessage      map[channel.MessageKey]lateMessageEntry
+	sessionLabels    map[string]string
+	endedSessions    map[string]time.Time
+	progressPanels   map[string]*progressPanel
+	progressInterval time.Duration
+	idCounter        uint64
 }
 
 func NewRouter(home string, cfg config.Config, channels []channel.Channel, logger *logx.Logger) (*Router, error) {
@@ -75,20 +77,22 @@ func NewRouter(home string, cfg config.Config, channels []channel.Channel, logge
 		channelByName[ch.Name()] = ch
 	}
 	return &Router{
-		home:          home,
-		machine:       machine,
-		cfg:           cfg,
-		state:         state,
-		channels:      channels,
-		channelByName: channelByName,
-		logger:        logger,
-		started:       time.Now(),
-		pending:       map[string]*pending{},
-		waiting:       map[string]string{},
-		byMessage:     map[channel.MessageKey]string{},
-		lateMessage:   map[channel.MessageKey]lateMessageEntry{},
-		sessionLabels: map[string]string{},
-		endedSessions: map[string]time.Time{},
+		home:             home,
+		machine:          machine,
+		cfg:              cfg,
+		state:            state,
+		channels:         channels,
+		channelByName:    channelByName,
+		logger:           logger,
+		started:          time.Now(),
+		pending:          map[string]*pending{},
+		waiting:          map[string]string{},
+		byMessage:        map[channel.MessageKey]string{},
+		lateMessage:      map[channel.MessageKey]lateMessageEntry{},
+		sessionLabels:    map[string]string{},
+		endedSessions:    map[string]time.Time{},
+		progressPanels:   map[string]*progressPanel{},
+		progressInterval: 3 * time.Second,
 	}, nil
 }
 
@@ -156,6 +160,7 @@ func (r *Router) rememberPrompt(event model.Event) {
 
 func (r *Router) HandleEvent(ctx context.Context, event model.Event) model.Resolution {
 	if event.Type == model.EventSessionEnd {
+		r.clearProgressPanel(event.SessionID)
 		r.endSession(event.SessionID)
 		return model.Resolution{Action: model.ActionNone}
 	}
@@ -163,11 +168,18 @@ func (r *Router) HandleEvent(ctx context.Context, event model.Event) model.Resol
 	delete(r.endedSessions, event.SessionID)
 	r.mu.Unlock()
 	if event.Type == model.EventPrompt {
+		r.dropStaleProgressPanel(event.SessionID)
 		r.rememberPrompt(event)
 		if r.Away() {
 			return model.Resolution{Action: model.ActionContext, Context: "O usuário está em modo ausente e acompanha pelo celular. Ao terminar ou precisar de uma decisão, encerre o turno com uma mensagem clara e autocontida."}
 		}
 		return model.Resolution{Action: model.ActionNone}
+	}
+	if event.Type == model.EventProgress {
+		return r.handleProgress(event)
+	}
+	if event.Type == model.EventStop {
+		r.finishProgressPanel(event)
 	}
 
 	r.mu.Lock()

@@ -51,7 +51,9 @@ func Execute(kind model.EventType, agent model.Agent, stdin []byte, env map[stri
 		return nil
 	}
 	wait := 12 * time.Second
-	if kind == model.EventStop || kind == model.EventPermission || kind == model.EventQuestion {
+	if kind == model.EventProgress {
+		wait = 3 * time.Second
+	} else if kind == model.EventStop || kind == model.EventPermission || kind == model.EventQuestion {
 		wait = cfg.WaitFor(string(kind)) + 15*time.Second
 		if wait < 20*time.Second {
 			wait = 20 * time.Second

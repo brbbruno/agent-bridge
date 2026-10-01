@@ -103,6 +103,30 @@ func TestAdminTestWithoutChannelsReturnsUnavailable(t *testing.T) {
 	}
 }
 
+func TestHTTPAcceptsProgressEvent(t *testing.T) {
+	server, err := NewServer(t.TempDir(), config.Default(), "auth-token", nil, logx.New(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	body, _ := json.Marshal(model.Event{Agent: model.AgentDevin, Type: model.EventProgress, SessionID: "session", TurnID: "turn", ToolName: "exec"})
+	req, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/progress", bytes.NewReader(body))
+	req.Header.Set(tokenHeader, "auth-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP=%d; esperava 200", resp.StatusCode)
+	}
+	var resolution model.Resolution
+	if err := json.NewDecoder(resp.Body).Decode(&resolution); err != nil || resolution.Action != model.ActionNone {
+		t.Fatalf("resolução progress=%+v err=%v", resolution, err)
+	}
+}
+
 func TestHTTPRejectsMismatchedEventType(t *testing.T) {
 	cfg := config.Default()
 	server, err := NewServer(t.TempDir(), cfg, "auth-token", nil, logx.New(""))

@@ -109,6 +109,8 @@ func (c *Channel) Name() string { return "Discord" }
 
 func (c *Channel) MessageLimit() int { return messageLimit }
 
+func (c *Channel) SupportsProgress() bool { return true }
+
 func (c *Channel) Run(ctx context.Context, handle func(context.Context, channel.Update)) error {
 	if handle == nil {
 		return errors.New("handler de atualização Discord ausente")

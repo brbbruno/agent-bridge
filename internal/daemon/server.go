@@ -115,7 +115,7 @@ func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := strings.TrimPrefix(r.URL.Path, "/v1/")
-	if kind != string(model.EventStop) && kind != string(model.EventPermission) && kind != string(model.EventQuestion) && kind != string(model.EventPrompt) && kind != string(model.EventSessionEnd) {
+	if kind != string(model.EventStop) && kind != string(model.EventPermission) && kind != string(model.EventQuestion) && kind != string(model.EventPrompt) && kind != string(model.EventSessionEnd) && kind != string(model.EventProgress) {
 		http.Error(w, "evento inválido", http.StatusNotFound)
 		return
 	}

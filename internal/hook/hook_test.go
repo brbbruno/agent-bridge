@@ -71,6 +71,30 @@ func TestParseSpikeAndClaudeFixtures(t *testing.T) {
 	}
 }
 
+func TestParseProgressEventsAndEncode(t *testing.T) {
+	devin, err := Parse(model.EventProgress, model.AgentDevin, nil, []byte(`{"session_id":"devin-session","prompt_id":"turn-1","tool_name":"exec","tool_input":{"command":"go test ./...\nignored"},"tool_response":{"success":false}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devin.TurnID != "turn-1" || devin.ToolName != "exec" || devin.ToolSummary != "go test ./..." || !devin.ToolFailed {
+		t.Fatalf("progress Devin=%+v", devin)
+	}
+	claude, err := Parse(model.EventProgress, model.AgentClaude, nil, []byte(`{"session_id":"claude-session","prompt_id":"turn-2","tool_name":"Bash","tool_input":{"command":"echo hello\nignored"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claude.TurnID != "turn-2" || claude.ToolSummary != "echo hello" || claude.ToolFailed {
+		t.Fatalf("progress Claude Bash=%+v", claude)
+	}
+	file, err := Parse(model.EventProgress, model.AgentClaude, nil, []byte(`{"session_id":"claude-session","tool_name":"Read","tool_input":{"file_path":"C:\\repo\\config.go"}}`))
+	if err != nil || file.ToolSummary != "config.go" || file.ToolFailed {
+		t.Fatalf("progress Claude file=%+v err=%v", file, err)
+	}
+	if encoded, err := Encode(model.AgentDevin, model.EventProgress, model.Resolution{Action: model.ActionNone}); err != nil || len(encoded) != 0 {
+		t.Fatalf("progress hook output=%q err=%v", encoded, err)
+	}
+}
+
 func TestParseRejectsWrongQuestionTool(t *testing.T) {
 	payload := []byte(`{"tool_name":"read","tool_input":{"questions":[{"question":"x"}]}}`)
 	if _, err := Parse(model.EventQuestion, model.AgentDevin, nil, payload); err == nil {

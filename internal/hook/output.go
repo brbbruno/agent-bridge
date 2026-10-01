@@ -8,6 +8,9 @@ import (
 )
 
 func Encode(agent model.Agent, kind model.EventType, result model.Resolution) ([]byte, error) {
+	if kind == model.EventProgress {
+		return nil, nil
+	}
 	if result.Action == "" || result.Action == model.ActionNone {
 		return nil, nil
 	}

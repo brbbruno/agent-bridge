@@ -46,9 +46,9 @@ func Uninstall(options Options) (Result, error) { return mutate(options, false) 
 func Entries(agent string) ([]string, error) {
 	switch agent {
 	case "devin":
-		return []string{"Stop", "PermissionRequest", "PreToolUse", "UserPromptSubmit", "SessionEnd"}, nil
+		return []string{"Stop", "PermissionRequest", "PreToolUse", "UserPromptSubmit", "SessionEnd", "PostToolUse"}, nil
 	case "claude":
-		return []string{"Stop", "PermissionRequest", "PreToolUse", "UserPromptSubmit", "SessionEnd"}, nil
+		return []string{"Stop", "PermissionRequest", "PreToolUse", "UserPromptSubmit", "SessionEnd", "PostToolUse"}, nil
 	default:
 		return nil, fmt.Errorf("agente inválido: %s", agent)
 	}
@@ -167,6 +167,7 @@ func makeEntries(agent string, waits map[string]int) []hookEntry {
 		{Event: "PreToolUse", Matcher: questionMatcher, Timeout: waits["PreToolUse"], Kind: "question"},
 		{Event: "UserPromptSubmit", Matcher: "", Timeout: waits["UserPromptSubmit"], Kind: "prompt"},
 		{Event: "SessionEnd", Matcher: "", Timeout: waits["SessionEnd"], Kind: "session-end"},
+		{Event: "PostToolUse", Matcher: "", Timeout: 10, Kind: "progress"},
 	}
 }
 

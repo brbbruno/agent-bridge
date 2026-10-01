@@ -73,7 +73,7 @@ func runHook(args []string) int {
 	kind := model.EventType(args[0])
 	valid := map[model.EventType]bool{
 		model.EventStop: true, model.EventPermission: true, model.EventQuestion: true,
-		model.EventPrompt: true, model.EventSessionEnd: true,
+		model.EventPrompt: true, model.EventSessionEnd: true, model.EventProgress: true,
 	}
 	if !valid[kind] {
 		logHookError(fmt.Errorf("tipo de hook desconhecido: %s", kind))
@@ -458,5 +458,5 @@ Uso:
   agent-bridge version
 
 Hooks internos (invocados automaticamente):
-  agent-bridge hook <stop|permission|question|prompt|session-end> --agent devin|claude`)
+  agent-bridge hook <stop|permission|question|prompt|session-end|progress> --agent devin|claude`)
 }

@@ -39,6 +39,7 @@ type Config struct {
 	NotifyWhenPresent  bool          `json:"notify_when_present"`
 	MachineName        string        `json:"machine_name,omitempty"`
 	DevinExe           string        `json:"devin_exe,omitempty"`
+	ProgressDetail     string        `json:"progress_detail,omitempty"`
 }
 
 func MachineName(cfg Config) string {

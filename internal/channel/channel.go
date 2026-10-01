@@ -67,3 +67,7 @@ type Channel interface {
 	AnswerCallback(ctx context.Context, update Update, text string) error
 	RequestText(ctx context.Context, update Update, session SessionRef, prompt, token string) (SentMessage, error)
 }
+
+type ProgressCapable interface {
+	SupportsProgress() bool
+}

@@ -547,3 +547,211 @@ func TestUnknownChannelUpdateIsIgnored(t *testing.T) {
 		t.Fatalf("update desconhecido foi enfileirado: %d", queued)
 	}
 }
+
+func progressEvent(session, turn, tool, summary string, failed bool) model.Event {
+	value := event(model.EventProgress, session)
+	value.TurnID = turn
+	value.ToolName = tool
+	value.ToolSummary = summary
+	value.ToolFailed = failed
+	return value
+}
+
+func waitForProgressIdle(t *testing.T, router *Router, session string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		router.mu.Lock()
+		panel := router.progressPanels[session]
+		idle := panel != nil && !panel.inFlight && panel.timer == nil
+		router.mu.Unlock()
+		if idle {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("painel de andamento não terminou o flush")
+}
+
+func waitForDiscordEdits(t *testing.T, discord *fakechannel.Fake, count int) []fakechannel.EditRecord {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, edits := discord.Snapshot()
+		if len(edits) >= count {
+			return edits
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	_, edits := discord.Snapshot()
+	t.Fatalf("esperava %d edições do painel; recebeu %d", count, len(edits))
+	return nil
+}
+
+func TestProgressPanelDiscordOnlyAndCoalescesBursts(t *testing.T) {
+	telegram := fakechannel.New()
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, telegram, discord)
+	router.progressInterval = 40 * time.Millisecond
+	first := progressEvent("progress-session", "turn-1", "exec", "secret-command", false)
+	if got := router.HandleEvent(context.Background(), first); got.Action != model.ActionNone {
+		t.Fatalf("progress bloqueou hook: %+v", got)
+	}
+	messages := waitForSent(t, discord, 1)
+	waitForProgressIdle(t, router, first.SessionID)
+	wantSession := channel.SessionRef{ID: first.SessionID, Name: first.SessionName, Title: first.SessionTitle, Project: first.Project, Agent: string(first.Agent)}
+	if messages[0].Session != wantSession || !strings.Contains(messages[0].Text, "**Andamento do turno**") {
+		t.Fatalf("painel inicial=%+v", messages[0])
+	}
+	for index := 2; index <= 5; index++ {
+		if got := router.HandleEvent(context.Background(), progressEvent(first.SessionID, "turn-1", "exec", "secret-command", false)); got.Action != model.ActionNone {
+			t.Fatalf("progress %d bloqueou hook: %+v", index, got)
+		}
+	}
+	edits := waitForDiscordEdits(t, discord, 1)
+	if len(edits) != 1 || !strings.Contains(edits[0].Text, "5 ações") || strings.Contains(edits[0].Text, "secret-command") || strings.Contains(edits[0].Text, "`exec`") {
+		t.Fatalf("flush resumido não coalesceu ou expôs ferramenta: %+v", edits)
+	}
+	if sent, _ := telegram.Snapshot(); len(sent) != 0 {
+		t.Fatalf("Telegram recebeu painel de andamento: %+v", sent)
+	}
+	router.mu.Lock()
+	pendingMessages := len(router.byMessage) + len(router.lateMessage)
+	router.mu.Unlock()
+	if pendingMessages != 0 {
+		t.Fatalf("painel entrou no bookkeeping de respostas: %d", pendingMessages)
+	}
+}
+
+func TestProgressPanelCompleteShowsOnlyRecentActionsAndFailure(t *testing.T) {
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, discord)
+	router.progressInterval = 30 * time.Millisecond
+	router.cfg.ProgressDetail = "completo"
+	session := "complete-progress"
+	if got := router.HandleEvent(context.Background(), progressEvent(session, "turn", "exec", "old command", false)); got.Action != model.ActionNone {
+		t.Fatalf("progress bloqueou hook: %+v", got)
+	}
+	waitForSent(t, discord, 1)
+	waitForProgressIdle(t, router, session)
+	actions := []progressAction{
+		{category: progressEdits, toolName: "edit", summary: "router.go"},
+		{category: progressReads, toolName: "read", summary: "config.go"},
+		{category: progressSearches, toolName: "grep", summary: "ProgressCapable"},
+		{category: progressOther, toolName: "todo_write"},
+		{category: progressCommands, toolName: "exec", summary: "go vet ./...", failed: true},
+		{category: progressSearches, toolName: "web_search", summary: "intent API"},
+	}
+	for _, action := range actions {
+		value := progressEvent(session, "turn", action.toolName, action.summary, action.failed)
+		if got := router.HandleEvent(context.Background(), value); got.Action != model.ActionNone {
+			t.Fatalf("progress bloqueou hook: %+v", got)
+		}
+	}
+	edits := waitForDiscordEdits(t, discord, 1)
+	text := edits[0].Text
+	for _, want := range []string{"Últimas ações:", "editou `router.go`", "leu `config.go`", "buscou `ProgressCapable`", "`todo_write`", "falhou: `go vet ./...`", "buscou `intent API`"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("painel completo sem %q: %q", want, text)
+		}
+	}
+	if strings.Contains(text, "old command") || strings.Contains(text, "`exec`") {
+		t.Fatalf("painel não manteve apenas as últimas seis ações: %q", text)
+	}
+}
+
+func TestProgressStopFinalizesTurnAndSessionEndCancelsTimer(t *testing.T) {
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, discord)
+	router.cfg.NotifyWhenPresent = false
+	router.SetAway(false)
+	router.progressInterval = time.Hour
+	session := "finish-progress"
+	if got := router.HandleEvent(context.Background(), progressEvent(session, "turn-1", "read", "main.go", false)); got.Action != model.ActionNone {
+		t.Fatalf("progress bloqueou hook: %+v", got)
+	}
+	waitForSent(t, discord, 1)
+	waitForProgressIdle(t, router, session)
+	if got := router.HandleEvent(context.Background(), event(model.EventStop, session)); got.Action != model.ActionNone {
+		t.Fatalf("Stop presente bloqueou hook: %+v", got)
+	}
+	edits := waitForDiscordEdits(t, discord, 1)
+	if !strings.Contains(edits[0].Text, "concluído em") {
+		t.Fatalf("painel final não marcou a duração: %q", edits[0].Text)
+	}
+	if got := router.HandleEvent(context.Background(), progressEvent(session, "turn-2", "exec", "go test", false)); got.Action != model.ActionNone {
+		t.Fatalf("novo turno bloqueou hook: %+v", got)
+	}
+	waitForSent(t, discord, 2)
+	waitForProgressIdle(t, router, session)
+	if got := router.HandleEvent(context.Background(), progressEvent(session, "turn-2", "read", "file.go", false)); got.Action != model.ActionNone {
+		t.Fatalf("progress bloqueou hook: %+v", got)
+	}
+	router.HandleEvent(context.Background(), model.Event{Type: model.EventSessionEnd, SessionID: session})
+	time.Sleep(40 * time.Millisecond)
+	_, edits = discord.Snapshot()
+	if len(edits) != 1 {
+		t.Fatalf("SessionEnd não cancelou o timer do painel: %+v", edits)
+	}
+	router.mu.Lock()
+	_, exists := router.progressPanels[session]
+	router.mu.Unlock()
+	if exists {
+		t.Fatal("SessionEnd não removeu o painel")
+	}
+}
+
+func TestPromptDropsUnfinishedProgressPanel(t *testing.T) {
+	discord := fakechannel.NewNamed("Discord", 2000)
+	router := newMultiTestRouter(t, time.Second, discord)
+	router.progressInterval = time.Hour
+	session := "prompt-progress"
+	if got := router.HandleEvent(context.Background(), progressEvent(session, "turn", "exec", "go test", false)); got.Action != model.ActionNone {
+		t.Fatalf("progress bloqueou hook: %+v", got)
+	}
+	waitForSent(t, discord, 1)
+	waitForProgressIdle(t, router, session)
+	prompt := event(model.EventPrompt, session)
+	prompt.Prompt = "novo turno"
+	if got := router.HandleEvent(context.Background(), prompt); got.Action != model.ActionContext {
+		t.Fatalf("prompt=%+v", got)
+	}
+	if got := router.HandleEvent(context.Background(), progressEvent(session, "turn", "read", "file.go", false)); got.Action != model.ActionNone {
+		t.Fatalf("novo painel bloqueou hook: %+v", got)
+	}
+	waitForSent(t, discord, 2)
+}
+
+func TestProgressReturnsWithoutWaitingForChannelSend(t *testing.T) {
+	discord := fakechannel.NewNamed("Discord", 2000)
+	release := make(chan struct{})
+	discord.BlockSend = release
+	discord.SendStarted = make(chan struct{}, 1)
+	router := newMultiTestRouter(t, time.Second, discord)
+	start := time.Now()
+	if got := router.HandleEvent(context.Background(), progressEvent("blocked-progress", "turn", "exec", "slow command", false)); got.Action != model.ActionNone {
+		t.Fatalf("progress bloqueou hook: %+v", got)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("hook esperou o envio por %s", elapsed)
+	}
+	select {
+	case <-discord.SendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("envio bloqueado não começou")
+	}
+	close(release)
+	waitForSent(t, discord, 1)
+	waitForProgressIdle(t, router, "blocked-progress")
+}
+
+func TestProgressWithoutCapableChannelSendsNothing(t *testing.T) {
+	telegram := fakechannel.New()
+	router := newMultiTestRouter(t, time.Second, telegram)
+	if got := router.HandleEvent(context.Background(), progressEvent("no-progress", "turn", "exec", "go test", false)); got.Action != model.ActionNone {
+		t.Fatalf("progress bloqueou hook: %+v", got)
+	}
+	if sent, _ := telegram.Snapshot(); len(sent) != 0 {
+		t.Fatalf("Telegram recebeu painel: %+v", sent)
+	}
+}
