@@ -45,6 +45,12 @@ agent-bridge daemon stop
 agent-bridge test
 ```
 
+### Início automático
+
+Ao instalar hooks, `agent-bridge install` também registra o daemon para iniciar na próxima entrada do usuário. Consulte, habilite ou desabilite essa opção com `agent-bridge autostart status`, `agent-bridge autostart on` e `agent-bridge autostart off`. O registro fica no Run do usuário no Windows, em `~/Library/LaunchAgents/io.github.brbbruno.agent-bridge.plist` no macOS e em `$XDG_CONFIG_HOME/autostart/agent-bridge.desktop` (ou `~/.config/autostart/agent-bridge.desktop`) no Linux. No Windows, uma janela de console pode aparecer rapidamente durante a entrada.
+
+Se `AGENT_BRIDGE_HOME` estiver definido, a instalação de hooks não ativa o início automático; remova a variável e execute `agent-bridge autostart on`. Para evitar que mensagens antigas sejam processadas muito depois de uma parada do daemon, mensagens do Telegram com mais de dez minutos são ignoradas e o bot informa quantas foram descartadas.
+
 A configuração fica em `<UserConfigDir>/agent-bridge/config.json`, ou em `AGENT_BRIDGE_HOME/config.json` quando essa variável está definida. Por padrão, o diretório é `%APPDATA%\agent-bridge` no Windows, `~/Library/Application Support/agent-bridge` no macOS e `~/.config/agent-bridge` no Linux (respeitando `XDG_CONFIG_HOME`, quando definido). Se editar `config.json` manualmente, execute `agent-bridge daemon stop`; o próximo hook iniciará o daemon novamente com a configuração atualizada. `port` usa `47821` por padrão; `telegram.api_base` pode apontar para um servidor Bot API compatível em testes.
 
 ### Identificação das sessões

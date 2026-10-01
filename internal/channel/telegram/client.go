@@ -24,13 +24,15 @@ type Client struct {
 	base   string
 	http   *http.Client
 	logger *logx.Logger
+	now    func() time.Time
+	sleep  func(context.Context, time.Duration) bool
 }
 
 func New(token string, chatID int64, apiBase string) *Client {
 	if apiBase == "" {
 		apiBase = "https://api.telegram.org"
 	}
-	return &Client{token: token, chatID: chatID, base: strings.TrimRight(apiBase, "/"), http: &http.Client{Timeout: 40 * time.Second}}
+	return &Client{token: token, chatID: chatID, base: strings.TrimRight(apiBase, "/"), http: &http.Client{Timeout: 40 * time.Second}, now: time.Now, sleep: waitContext}
 }
 
 func (c *Client) SetHTTPClient(client *http.Client) {
@@ -49,23 +51,39 @@ func (c *Client) Run(ctx context.Context, handle func(context.Context, channel.U
 	if handle == nil {
 		return errors.New("handler de atualização Telegram ausente")
 	}
+	start := c.now()
 	var offset int64
+	var failures int
+	var lastErrorLog time.Time
+	backoff := time.Second
 	for ctx.Err() == nil {
 		updates, err := c.Updates(ctx, offset, 30)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if c.logger != nil {
+			failures++
+			now := c.now()
+			if c.logger != nil && (failures == 1 || now.Sub(lastErrorLog) >= 10*time.Minute) {
 				c.logger.Errorf("receber atualização Telegram: %v", err)
+				lastErrorLog = now
 			}
-			select {
-			case <-ctx.Done():
+			if !c.sleep(ctx, backoff) {
 				return nil
-			case <-time.After(time.Second):
+			}
+			backoff *= 2
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
 			}
 			continue
 		}
+		if failures > 0 && c.logger != nil {
+			c.logger.Infof("conexão com o Telegram restabelecida após %d falhas", failures)
+		}
+		failures = 0
+		lastErrorLog = time.Time{}
+		backoff = time.Second
+		skipped := 0
 		for _, update := range updates {
 			if update.ID >= offset {
 				offset = update.ID + 1
@@ -73,11 +91,35 @@ func (c *Client) Run(ctx context.Context, handle func(context.Context, channel.U
 			if update.Ignored {
 				continue
 			}
+			if !update.Time.IsZero() && update.Time.Before(start.Add(-10*time.Minute)) {
+				skipped++
+				continue
+			}
 			update.Channel = c.Name()
 			handle(ctx, update)
 		}
+		if skipped > 0 {
+			text := fmt.Sprintf("%d mensagens enviadas enquanto o agent-bridge estava parado foram ignoradas. Reenvie se ainda for necessário.", skipped)
+			if skipped == 1 {
+				text = "1 mensagem enviada enquanto o agent-bridge estava parado foi ignorada. Reenvie se ainda for necessário."
+			}
+			if _, err := c.send(ctx, text, nil, false, 0); err != nil && c.logger != nil {
+				c.logger.Errorf("avisar sobre mensagens antigas do Telegram: %v", err)
+			}
+		}
 	}
 	return nil
+}
+
+func waitContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 type APIError struct {
@@ -174,6 +216,7 @@ type Chat struct {
 
 type APIMessage struct {
 	MessageID int64  `json:"message_id"`
+	Date      int64  `json:"date"`
 	Text      string `json:"text"`
 	Chat      Chat   `json:"chat"`
 	From      User   `json:"from"`
@@ -351,6 +394,9 @@ func (c *Client) Updates(ctx context.Context, offset int64, timeoutSeconds int) 
 				continue
 			}
 			item := channel.Update{ID: update.UpdateID, ChatID: message.Chat.ID, UserID: message.From.ID, FirstName: message.From.First, Username: message.From.Username, Private: message.Chat.Type == "private", MessageID: message.MessageID, Text: message.Text}
+			if message.Date != 0 {
+				item.Time = time.Unix(message.Date, 0)
+			}
 			if message.ReplyTo != nil {
 				item.ReplyToMessage = message.ReplyTo.MessageID
 			}

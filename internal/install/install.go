@@ -72,7 +72,7 @@ func mutate(options Options, adding bool) (Result, error) {
 		}
 	}
 	warnings := []string{}
-	if isTransientExecutable(options.Executable) {
+	if IsTransientExecutable(options.Executable) {
 		warnings = append(warnings, "O executável está em uma pasta temporária ou Downloads; mova-o para um local permanente e reinstale os hooks.")
 	}
 
@@ -335,7 +335,7 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func isTransientExecutable(path string) bool {
+func IsTransientExecutable(path string) bool {
 	clean := strings.ToLower(filepath.Clean(path))
 	temp := strings.ToLower(os.TempDir())
 	home, _ := os.UserHomeDir()

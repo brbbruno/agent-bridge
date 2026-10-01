@@ -9,9 +9,11 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/brbbruno/agent-bridge/internal/autostart"
 	"github.com/brbbruno/agent-bridge/internal/channel"
 	discordchannel "github.com/brbbruno/agent-bridge/internal/channel/discord"
 	"github.com/brbbruno/agent-bridge/internal/channel/telegram"
@@ -50,6 +52,8 @@ func run(args []string) int {
 		return runDaemonCommand(args[1:])
 	case "away":
 		return runAway(args[1:])
+	case "autostart":
+		return runAutostart(args[1:])
 	case "test":
 		return runTest()
 	case "setup":
@@ -400,7 +404,97 @@ func runInstall(args []string, adding bool) int {
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(os.Stdout, "Aviso: %s\n", warning)
 	}
+	if adding {
+		if os.Getenv("AGENT_BRIDGE_HOME") != "" {
+			fmt.Fprintln(os.Stdout, "Aviso: início automático não ativado porque AGENT_BRIDGE_HOME está definido e não pode ser preservado no início da sessão. Remova essa variável e execute `agent-bridge autostart on`.")
+			return 0
+		}
+		options, err := autostartOptions()
+		if err != nil {
+			fmt.Fprintf(os.Stdout, "Aviso: não foi possível ativar o início automático: %v\n", err)
+			return 0
+		}
+		status, err := autostart.Enable(options)
+		if err != nil {
+			fmt.Fprintf(os.Stdout, "Aviso: não foi possível ativar o início automático: %v\n", err)
+			return 0
+		}
+		fmt.Fprintf(os.Stdout, "Início automático ativado: %s\n", status.Location)
+	}
 	return 0
+}
+
+func runAutostart(args []string) int {
+	if len(args) != 1 || (args[0] != "on" && args[0] != "off" && args[0] != "status") {
+		fmt.Fprintln(os.Stderr, "Uso: agent-bridge autostart on|off|status")
+		return 2
+	}
+	if args[0] == "on" && os.Getenv("AGENT_BRIDGE_HOME") != "" {
+		fmt.Fprintln(os.Stderr, "Não é possível ativar o início automático enquanto AGENT_BRIDGE_HOME está definido; remova essa variável e execute `agent-bridge autostart on`.")
+		return 1
+	}
+	options, err := autostartOptions()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Erro:", err)
+		return 1
+	}
+	switch args[0] {
+	case "on":
+		if install.IsTransientExecutable(options.Executable) {
+			fmt.Fprintln(os.Stdout, "Aviso: o executável está em uma pasta temporária ou Downloads; mova-o para um local permanente.")
+		}
+		status, err := autostart.Enable(options)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Não foi possível ativar o início automático:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stdout, "Início automático ativado: %s\nComando: %s\n", status.Location, status.Command)
+	case "off":
+		if err := autostart.Disable(options); err != nil {
+			fmt.Fprintln(os.Stderr, "Não foi possível desativar o início automático:", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "Início automático desativado.")
+	case "status":
+		status, err := autostart.Get(options)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Não foi possível consultar o início automático:", err)
+			return 1
+		}
+		if status.Enabled {
+			fmt.Fprintf(os.Stdout, "Início automático ativo.\nComando: %s\nLocal: %s\n", status.Command, status.Location)
+			if !status.MatchesExecutable {
+				fmt.Fprintln(os.Stdout, "Aviso: a entrada aponta para outro executável; execute `agent-bridge autostart on` para atualizá-la.")
+			}
+		} else {
+			fmt.Fprintf(os.Stdout, "Início automático inativo.\nLocal: %s\n", status.Location)
+		}
+	}
+	return 0
+}
+
+func autostartOptions() (autostart.Options, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return autostart.Options{}, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return autostart.Options{}, err
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return autostart.Options{}, err
+	}
+	executable, err = filepath.Abs(executable)
+	if err != nil {
+		return autostart.Options{}, err
+	}
+	configDir := os.Getenv("XDG_CONFIG_HOME")
+	if configDir == "" {
+		configDir = filepath.Join(home, ".config")
+	}
+	return autostart.Options{Executable: executable, HomeDir: home, ConfigDir: configDir}, nil
 }
 
 func loadRuntime() (string, config.Config, *logx.Logger, error) {
@@ -453,6 +547,7 @@ Uso:
   agent-bridge install --agent devin|claude --scope user|project [--project-dir DIR]
   agent-bridge uninstall --agent devin|claude --scope user|project [--project-dir DIR]
   agent-bridge away on|off|status
+  agent-bridge autostart on|off|status
   agent-bridge test
   agent-bridge daemon [start|stop|status]
   agent-bridge version

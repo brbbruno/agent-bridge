@@ -354,3 +354,150 @@ func TestTelegramRequestTextUsesForceReply(t *testing.T) {
 		t.Fatalf("ordem de RequestText=%v", methods)
 	}
 }
+
+func TestTelegramRunBackoffGrowsAndCaps(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "description": "offline"})
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	var delays []time.Duration
+	client.sleep = func(_ context.Context, delay time.Duration) bool {
+		delays = append(delays, delay)
+		return len(delays) < 7
+	}
+	if err := client.Run(context.Background(), func(context.Context, channel.Update) {}); err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second}
+	if len(delays) != len(want) {
+		t.Fatalf("backoff delays=%v", delays)
+	}
+	for index := range want {
+		if delays[index] != want[index] {
+			t.Fatalf("backoff delays=%v, want %v", delays, want)
+		}
+	}
+}
+
+func TestTelegramRunSkipsOldBacklogAndSendsNotice(t *testing.T) {
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	notices := make(chan string, 2)
+	secondOffset := make(chan int64, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			text, _ := request["text"].(string)
+			notices <- text
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 40}})
+			return
+		}
+		var request struct {
+			Offset int64 `json:"offset"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.Offset == 0 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": []any{
+				map[string]any{"update_id": 1, "message": map[string]any{"message_id": 11, "date": start.Add(-11 * time.Minute).Unix(), "text": "antiga", "chat": map[string]any{"id": 9, "type": "private"}, "from": map[string]any{"id": 9}}},
+				map[string]any{"update_id": 2, "message": map[string]any{"message_id": 12, "date": start.Add(-5 * time.Minute).Unix(), "text": "recente", "chat": map[string]any{"id": 9, "type": "private"}, "from": map[string]any{"id": 9}}},
+			}})
+			return
+		}
+		secondOffset <- request.Offset
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	client.now = func() time.Time { return start }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := make(chan channel.Update, 2)
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx, func(_ context.Context, update channel.Update) { updates <- update }) }()
+	select {
+	case update := <-updates:
+		if update.Text != "recente" || !update.Time.Equal(start.Add(-5*time.Minute)) {
+			t.Fatalf("update entregue inesperado: %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não entregou a mensagem recente")
+	}
+	select {
+	case notice := <-notices:
+		if notice != "1 mensagem enviada enquanto o agent-bridge estava parado foi ignorada. Reenvie se ainda for necessário." {
+			t.Fatalf("aviso inesperado: %q", notice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não enviou aviso sobre a mensagem antiga")
+	}
+	select {
+	case offset := <-secondOffset:
+		if offset != 3 {
+			t.Fatalf("offset seguinte=%d; esperado 3", offset)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não avançou o offset além das mensagens antigas e recentes")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não encerrou após cancelar o contexto")
+	}
+	if len(updates) != 0 || len(notices) != 0 {
+		t.Fatalf("atualizações extras=%d, avisos extras=%d", len(updates), len(notices))
+	}
+}
+
+func TestTelegramRunCallbackHasUnknownTime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Offset int64 `json:"offset"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.Offset == 0 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": []any{
+				map[string]any{"update_id": 7, "callback_query": map[string]any{"id": "cb", "data": "ok", "from": map[string]any{"id": 9}, "message": map[string]any{"message_id": 12, "date": time.Now().Unix(), "chat": map[string]any{"id": 9, "type": "private"}}}},
+			}})
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	client := New("TOKEN", 9, server.URL)
+	client.SetHTTPClient(server.Client())
+	ctx, cancel := context.WithCancel(context.Background())
+	updates := make(chan channel.Update, 1)
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx, func(_ context.Context, update channel.Update) { updates <- update }) }()
+	select {
+	case update := <-updates:
+		if update.CallbackID != "cb" || !update.Time.IsZero() {
+			t.Fatalf("callback=%+v; esperado Time zero", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não entregou o callback")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run não encerrou após cancelar o contexto")
+	}
+}

@@ -1,6 +1,9 @@
 package channel
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 const MaxMessageRunes = 4096
 
@@ -41,6 +44,7 @@ type SentMessage struct {
 
 type Update struct {
 	Channel        string
+	Time           time.Time
 	ID             int64
 	ChatID         int64
 	UserID         int64
