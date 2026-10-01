@@ -107,7 +107,9 @@ func TestReworkQuestionResolutionKeepsQuestionAndAnswer(t *testing.T) {
 
 func TestReworkLongStopKeepsChunksAndRepliesWithStatus(t *testing.T) {
 	router, bot := newReworkRouter(t, time.Second)
-	event := model.Event{Agent: model.AgentDevin, Type: model.EventStop, SessionID: "long-stop", SessionName: "long-stop", Project: "demo", Message: strings.Repeat("x", 3*channel.MaxMessageRunes-40)}
+	event := model.Event{Agent: model.AgentDevin, Type: model.EventStop, SessionID: "long-stop", SessionName: "long-stop", Project: "demo"}
+	prefix := router.header(event) + "\n"
+	event.Message = strings.Repeat("x", 3*channel.MaxMessageRunes-40-len([]rune(prefix)))
 	result := runReworkEvent(router, event)
 	originals := waitReworkSends(t, bot, 3)
 	last := originals[2]

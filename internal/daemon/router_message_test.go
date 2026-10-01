@@ -39,7 +39,8 @@ func TestQuestionResolutionKeepsQuestionAndAnswer(t *testing.T) {
 func TestLongStopUsesReplyStatusWithoutReplacingChunks(t *testing.T) {
 	router, bot, _ := newTestRouter(t, time.Second)
 	value := event(model.EventStop, "long-stop")
-	value.Message = strings.Repeat("x", 3*channel.MaxMessageRunes-40)
+	prefix := router.header(value) + "\n"
+	value.Message = strings.Repeat("x", 3*channel.MaxMessageRunes-40-len([]rune(prefix)))
 	result := runEvent(router, value)
 	sent := waitForSent(t, bot, 3)
 	router.HandleUpdate(context.Background(), channel.Update{ChatID: 123, ReplyToMessage: sent[0].ID, Text: "Continue"})

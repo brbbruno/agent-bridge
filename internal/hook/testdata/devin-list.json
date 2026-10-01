@@ -1,0 +1,14 @@
+[
+  {
+    "id": "possible-celestite",
+    "short_id": "possible-celestite",
+    "working_directory": "C:\\Users\\bruno\\IdeaProjects\\agent-bridge",
+    "title": "Corrigir login"
+  },
+  {
+    "id": "other-session",
+    "short_id": "other",
+    "working_directory": "C:\\Users\\bruno\\IdeaProjects\\other-project",
+    "title": "Outra tarefa"
+  }
+]

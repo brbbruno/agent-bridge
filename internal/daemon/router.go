@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,7 @@ type pending struct {
 type Router struct {
 	mu            sync.Mutex
 	home          string
+	machine       string
 	cfg           config.Config
 	state         persistedState
 	channel       channel.Channel
@@ -64,8 +66,17 @@ func NewRouter(home string, cfg config.Config, telegram channel.Channel, logger 
 	if err != nil {
 		return nil, err
 	}
+	machine := strings.TrimSpace(cfg.MachineName)
+	if machine == "" {
+		machine, _ = os.Hostname()
+		machine = strings.TrimSpace(machine)
+		if machine == "" {
+			machine = "computador"
+		}
+	}
 	return &Router{
 		home:          home,
+		machine:       machine,
 		cfg:           cfg,
 		state:         state,
 		channel:       telegram,
@@ -80,6 +91,42 @@ func NewRouter(home string, cfg config.Config, telegram channel.Channel, logger 
 	}, nil
 }
 
+func (r *Router) rememberPrompt(event model.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	changed := false
+	if r.state.SessionTitles == nil {
+		r.state.SessionTitles = map[string]sessionTitle{}
+		changed = true
+	}
+	cutoff := now.Add(-7 * 24 * time.Hour)
+	for session, title := range r.state.SessionTitles {
+		if title.SeenAt.Before(cutoff) {
+			delete(r.state.SessionTitles, session)
+			changed = true
+		}
+	}
+	if event.SessionID != "" && strings.TrimSpace(event.Prompt) != "" {
+		if _, exists := r.state.SessionTitles[event.SessionID]; !exists {
+			title := strings.Join(strings.Fields(event.Prompt), " ")
+			runes := []rune(title)
+			if len(runes) > 80 {
+				title = string(runes[:79]) + "…"
+			}
+			if title != "" {
+				r.state.SessionTitles[event.SessionID] = sessionTitle{Title: title, SeenAt: now}
+				changed = true
+			}
+		}
+	}
+	if changed {
+		if err := saveState(r.home, r.state); err != nil {
+			r.logger.Errorf("salvar título de sessão: %v", err)
+		}
+	}
+}
+
 func (r *Router) HandleEvent(ctx context.Context, event model.Event) model.Resolution {
 	if event.Type == model.EventSessionEnd {
 		r.endSession(event.SessionID)
@@ -89,6 +136,7 @@ func (r *Router) HandleEvent(ctx context.Context, event model.Event) model.Resol
 	delete(r.endedSessions, event.SessionID)
 	r.mu.Unlock()
 	if event.Type == model.EventPrompt {
+		r.rememberPrompt(event)
 		if r.Away() {
 			return model.Resolution{Action: model.ActionContext, Context: "O usuário está em modo ausente e acompanha pelo celular. Ao terminar ou precisar de uma decisão, encerre o turno com uma mensagem clara e autocontida."}
 		}
@@ -756,6 +804,7 @@ func (r *Router) endSession(session string) {
 	r.endedSessions[session] = now
 	r.pruneEndedSessionsLocked(now)
 	delete(r.state.Queues, session)
+	delete(r.state.SessionTitles, session)
 	for messageID, entry := range r.lateMessage {
 		if entry.sessionID == session {
 			delete(r.lateMessage, messageID)
@@ -857,7 +906,28 @@ func (r *Router) send(ctx context.Context, text string, keyboard channel.Keyboar
 }
 
 func (r *Router) header(event model.Event) string {
-	return fmt.Sprintf("[%s · %s · %s]", event.Agent, event.Project, event.SessionName)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.headerLocked(event)
+}
+
+func (r *Router) headerLocked(event model.Event) string {
+	agent := string(event.Agent)
+	switch event.Agent {
+	case model.AgentDevin:
+		agent = "Devin"
+	case model.AgentClaude:
+		agent = "Claude"
+	}
+	header := fmt.Sprintf("%s · %s · %s", agent, r.machine, event.Project)
+	title := strings.TrimSpace(event.SessionTitle)
+	if title == "" {
+		title = strings.TrimSpace(r.state.SessionTitles[event.SessionID].Title)
+	}
+	if title != "" {
+		return fmt.Sprintf("%s\nSessão: %s (%s)", header, title, event.SessionName)
+	}
+	return fmt.Sprintf("%s\nSessão: %s", header, event.SessionName)
 }
 
 func (r *Router) questionPrompt(event model.Event, id string, index int, selected map[int]bool) (string, channel.Keyboard) {

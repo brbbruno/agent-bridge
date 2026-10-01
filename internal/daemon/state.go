@@ -5,15 +5,22 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type persistedState struct {
-	Away   bool                `json:"away"`
-	Queues map[string][]string `json:"queued_late_replies"`
+	Away          bool                    `json:"away"`
+	Queues        map[string][]string     `json:"queued_late_replies"`
+	SessionTitles map[string]sessionTitle `json:"session_titles,omitempty"`
+}
+
+type sessionTitle struct {
+	Title  string    `json:"title"`
+	SeenAt time.Time `json:"seen_at"`
 }
 
 func loadState(home string) (persistedState, error) {
-	state := persistedState{Queues: map[string][]string{}}
+	state := persistedState{Queues: map[string][]string{}, SessionTitles: map[string]sessionTitle{}}
 	data, err := os.ReadFile(filepath.Join(home, "state.json"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -27,12 +34,18 @@ func loadState(home string) (persistedState, error) {
 	if state.Queues == nil {
 		state.Queues = map[string][]string{}
 	}
+	if state.SessionTitles == nil {
+		state.SessionTitles = map[string]sessionTitle{}
+	}
 	return state, nil
 }
 
 func saveState(home string, state persistedState) error {
 	if state.Queues == nil {
 		state.Queues = map[string][]string{}
+	}
+	if state.SessionTitles == nil {
+		state.SessionTitles = map[string]sessionTitle{}
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

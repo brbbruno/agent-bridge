@@ -21,6 +21,7 @@ func newTestRouter(t *testing.T, wait time.Duration) (*Router, *fakechannel.Fake
 	cfg.PermissionWait = wait
 	cfg.QuestionWait = wait
 	cfg.Telegram.ChatID = 123
+	cfg.MachineName = "PC-TESTE"
 	fake := fakechannel.New()
 	router, err := NewRouter(home, cfg, fake, logx.New(""))
 	if err != nil {
@@ -231,6 +232,50 @@ func TestPermissionTimeoutFallsBackWithoutDecision(t *testing.T) {
 	waitForSent(t, fake, 1)
 	if got := <-result; got.Action != model.ActionNone {
 		t.Fatalf("timeout de permissão deve voltar ao fluxo local: %+v", got)
+	}
+}
+
+func TestHeaderShowsMachineAndSessionTitle(t *testing.T) {
+	router, _, _ := newTestRouter(t, time.Second)
+	value := model.Event{Agent: model.AgentDevin, Project: "demo", SessionName: "possible-celestite", SessionTitle: "Corrigir login"}
+	want := "Devin · PC-TESTE · demo\nSessão: Corrigir login (possible-celestite)"
+	if got := router.header(value); got != want {
+		t.Fatalf("cabeçalho=%q; esperado %q", got, want)
+	}
+	value.SessionTitle = ""
+	want = "Devin · PC-TESTE · demo\nSessão: possible-celestite"
+	if got := router.header(value); got != want {
+		t.Fatalf("cabeçalho sem título=%q; esperado %q", got, want)
+	}
+}
+
+func TestHeaderFallsBackToFirstPrompt(t *testing.T) {
+	router, fake, home := newTestRouter(t, time.Second)
+	first := event(model.EventPrompt, "S")
+	first.Prompt = "Primeiro   pedido\ncom quebra"
+	if got := router.HandleEvent(context.Background(), first); got.Action != model.ActionContext {
+		t.Fatalf("primeiro prompt=%+v", got)
+	}
+	second := event(model.EventPrompt, "S")
+	second.Prompt = "Segundo"
+	if got := router.HandleEvent(context.Background(), second); got.Action != model.ActionContext {
+		t.Fatalf("segundo prompt=%+v", got)
+	}
+	stop := event(model.EventStop, "S")
+	if got := router.header(stop); !strings.Contains(got, "Sessão: Primeiro pedido com quebra (") || strings.Contains(got, "Segundo") {
+		t.Fatalf("título do primeiro prompt inesperado: %q", got)
+	}
+
+	reloaded, err := NewRouter(home, router.cfg, fake, logx.New(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.header(stop); !strings.Contains(got, "Sessão: Primeiro pedido com quebra (") {
+		t.Fatalf("título de sessão não persistido: %q", got)
+	}
+	reloaded.HandleEvent(context.Background(), model.Event{Type: model.EventSessionEnd, SessionID: "S"})
+	if got := reloaded.header(stop); got != "Devin · PC-TESTE · demo\nSessão: S" {
+		t.Fatalf("título não removido no fim da sessão: %q", got)
 	}
 }
 

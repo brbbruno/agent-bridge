@@ -38,6 +38,13 @@ func Execute(kind model.EventType, agent model.Agent, stdin []byte, env map[stri
 		logger.Errorf("ler configuração do hook: %v", err)
 		return nil
 	}
+	if agent == model.AgentDevin && (kind == model.EventStop || kind == model.EventPermission || kind == model.EventQuestion) && event.CWD != "" {
+		if exe := devinExecutable(cfg); exe != "" {
+			titleCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			event.SessionTitle = truncate(lookupDevinTitle(titleCtx, exe, event.CWD, event.SessionID), 80)
+			cancel()
+		}
+	}
 	client, err := daemon.EnsureRunning(home, cfg, logger)
 	if err != nil {
 		logger.Errorf("garantir daemon ativo: %v", err)

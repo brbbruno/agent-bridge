@@ -29,6 +29,8 @@ type Config struct {
 	PermissionWaitText string        `json:"permission_wait"`
 	QuestionWaitText   string        `json:"question_wait"`
 	NotifyWhenPresent  bool          `json:"notify_when_present"`
+	MachineName        string        `json:"machine_name,omitempty"`
+	DevinExe           string        `json:"devin_exe,omitempty"`
 }
 
 func Default() Config {

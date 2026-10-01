@@ -142,10 +142,10 @@ func TestDevinTwoWayE2E(t *testing.T) {
 	var stopMu sync.Mutex
 	stopReplies := map[string]int{}
 	fake.SetResponder(func(message fakeMessage) {
-		if !strings.HasPrefix(message.Text, "[devin ·") || len(message.Keyboard) > 0 || message.ForceReply {
+		if !strings.HasPrefix(message.Text, "Devin ·") || len(message.Keyboard) > 0 || message.ForceReply {
 			return
 		}
-		header := strings.SplitN(message.Text, "\n", 2)[0]
+		header := sessionKey(message.Text)
 		stopMu.Lock()
 		stopReplies[header]++
 		first := stopReplies[header] == 1
@@ -156,7 +156,7 @@ func TestDevinTwoWayE2E(t *testing.T) {
 	})
 	resultA := startDevin(t, devinExe, project, home, "Responda com uma frase curta e encerre o turno.")
 	stopMessage, ok := fake.WaitSend(time.Now().Add(90*time.Second), func(message fakeMessage) bool {
-		return strings.HasPrefix(message.Text, "[devin ·") && len(message.Keyboard) == 0
+		return strings.HasPrefix(message.Text, "Devin ·") && len(message.Keyboard) == 0
 	})
 	if !ok {
 		t.Fatalf("E2E A: nenhum Stop enviado ao Telegram; artefatos: %s", artifactRoot)
@@ -308,7 +308,7 @@ func TestDevinTwoWayE2E(t *testing.T) {
 		t.Fatalf("E2E D: enviar prompt inicial: %v", err)
 	}
 	lateStop, ok := fake.WaitSend(time.Now().Add(90*time.Second), func(message fakeMessage) bool {
-		return strings.HasPrefix(message.Text, "[devin ·") && len(message.Keyboard) == 0
+		return strings.HasPrefix(message.Text, "Devin ·") && len(message.Keyboard) == 0
 	})
 	if !ok {
 		writeArtifact(t, artifactRoot, "scenario-d-no-stop.txt", []byte(interactive.Output()))
@@ -542,10 +542,10 @@ func stopOnceResponder(fake *fakeBot, reply string) func(fakeMessage) {
 	var mu sync.Mutex
 	answered := map[string]bool{}
 	return func(message fakeMessage) {
-		if !strings.HasPrefix(message.Text, "[devin ·") || len(message.Keyboard) > 0 || message.ForceReply {
+		if !strings.HasPrefix(message.Text, "Devin ·") || len(message.Keyboard) > 0 || message.ForceReply {
 			return
 		}
-		header := strings.SplitN(message.Text, "\n", 2)[0]
+		header := sessionKey(message.Text)
 		mu.Lock()
 		if answered[header] {
 			mu.Unlock()
@@ -555,6 +555,18 @@ func stopOnceResponder(fake *fakeBot, reply string) func(fakeMessage) {
 		mu.Unlock()
 		fake.PushMessage(message.ChatID, message.ID, reply)
 	}
+}
+
+func sessionKey(text string) string {
+	lines := strings.SplitN(text, "\n", 3)
+	if len(lines) < 2 {
+		return text
+	}
+	line := strings.TrimPrefix(lines[1], "Sessão: ")
+	if index := strings.LastIndex(line, " ("); index >= 0 && strings.HasSuffix(line, ")") {
+		return line[index+2 : len(line)-1]
+	}
+	return line
 }
 
 func assertFakeEditPreserves(t *testing.T, fake *fakeBot, messageID int64, original, expected string) {

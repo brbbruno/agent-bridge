@@ -33,6 +33,19 @@ agent-bridge test
 
 A configuração fica em `<UserConfigDir>/agent-bridge/config.json`, ou em `AGENT_BRIDGE_HOME/config.json` quando essa variável está definida. Por padrão, o diretório é `%APPDATA%\agent-bridge` no Windows, `~/Library/Application Support/agent-bridge` no macOS e `~/.config/agent-bridge` no Linux (respeitando `XDG_CONFIG_HOME`, quando definido). Se editar `config.json` manualmente, execute `agent-bridge daemon stop`; o próximo hook iniciará o daemon novamente com a configuração atualizada. `port` usa `47821` por padrão; `telegram.api_base` pode apontar para um servidor Bot API compatível em testes.
 
+### Identificação das sessões
+
+As mensagens usam um cabeçalho em duas linhas com o agente, o computador e o projeto, seguido do título da sessão e seu ID:
+
+```
+Devin · BRUNO-PC · agent-bridge
+Sessão: Corrigir login (possible-celestite)
+```
+
+Para Devin, o título vem do CLI; se não estiver disponível, é usado o primeiro prompt da sessão. Configure `machine_name` para definir um apelido para o computador (o padrão é o hostname) e `devin_exe` para informar o caminho do CLI do Devin quando `devin` não estiver no `PATH`.
+
+Cada computador precisa atualmente de seu próprio bot: dois daemons consultando o mesmo bot entram em conflito ao usar `getUpdates`. O suporte a vários computadores no mesmo bot está planejado.
+
 ## Instalar hooks
 
 Para instalar hooks do usuário:
