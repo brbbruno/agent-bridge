@@ -43,7 +43,7 @@ func (c *Channel) handleApplicationCommand(ctx context.Context, interaction *dis
 		c.logError("responder comando Discord: %v", err)
 		return
 	}
-	sessionID, owned := c.ownedChannel(ctx, client, interaction.ChannelID)
+	sessionID, owned := c.ownedChannel(interaction.ChannelID)
 	if !owned {
 		return
 	}
@@ -76,12 +76,11 @@ func (c *Channel) handleApplicationCommand(ctx context.Context, interaction *dis
 }
 
 func (c *Channel) handleComponent(ctx context.Context, interaction *discordgo.Interaction, handle func(context.Context, channel.Update)) {
-	client, err := c.apiClient()
-	if err != nil {
+	if _, err := c.apiClient(); err != nil {
 		c.logError("processar interação Discord: %v", err)
 		return
 	}
-	sessionID, owned := c.ownedChannel(ctx, client, interaction.ChannelID)
+	sessionID, owned := c.ownedChannel(interaction.ChannelID)
 	if !owned {
 		return
 	}
@@ -113,7 +112,7 @@ func (c *Channel) handleModalSubmit(ctx context.Context, interaction *discordgo.
 		c.logError("responder formulário Discord: %v", err)
 		return
 	}
-	sessionID, owned := c.ownedChannel(ctx, client, interaction.ChannelID)
+	sessionID, owned := c.ownedChannel(interaction.ChannelID)
 	if !owned {
 		return
 	}
@@ -140,12 +139,7 @@ func (c *Channel) handleMessage(ctx context.Context, event *discordgo.MessageCre
 	if event == nil || event.Message == nil || event.Author == nil || event.Author.Bot {
 		return
 	}
-	client, err := c.apiClient()
-	if err != nil {
-		c.logError("processar mensagem Discord: %v", err)
-		return
-	}
-	sessionID, owned := c.ownedChannel(ctx, client, event.ChannelID)
+	sessionID, owned := c.ownedChannel(event.ChannelID)
 	if !owned || !c.allowedUser(event.Author.ID) {
 		return
 	}
@@ -170,6 +164,23 @@ func (c *Channel) handleBind(ctx context.Context, interaction *discordgo.Interac
 	if option == nil || !strings.EqualFold(option.StringValue(), c.machine) {
 		return
 	}
+	if userID == "" {
+		c.respondEphemeral(interaction, "Não foi possível identificar o usuário.")
+		return
+	}
+	authCfg, err := config.Load(c.home)
+	if err != nil {
+		c.respondEphemeral(interaction, "Não foi possível validar a configuração deste computador.")
+		return
+	}
+	if len(authCfg.Discord.AllowedUserIDs) == 0 {
+		c.respondEphemeral(interaction, "Nenhum usuário autorizado. Execute agent-bridge setup discord neste computador.")
+		return
+	}
+	if !containsUser(authCfg.Discord.AllowedUserIDs, userID) {
+		c.respondEphemeral(interaction, "Sem permissão.")
+		return
+	}
 	client, err := c.apiClient()
 	if err != nil {
 		c.logError("validar canal Discord: %v", err)
@@ -188,14 +199,16 @@ func (c *Channel) handleBind(ctx context.Context, interaction *discordgo.Interac
 		c.respondEphemeral(interaction, "Use /vincular em um canal de texto.")
 		return
 	}
-	if userID == "" {
-		c.respondEphemeral(interaction, "Não foi possível identificar o usuário.")
-		return
-	}
 	c.threadMu.Lock()
 	c.mu.Lock()
 	cfg, err := config.Load(c.home)
-	if err == nil && len(cfg.Discord.AllowedUserIDs) > 0 && !containsUser(cfg.Discord.AllowedUserIDs, userID) {
+	if err == nil && len(cfg.Discord.AllowedUserIDs) == 0 {
+		c.mu.Unlock()
+		c.threadMu.Unlock()
+		c.respondEphemeral(interaction, "Nenhum usuário autorizado. Execute agent-bridge setup discord neste computador.")
+		return
+	}
+	if err == nil && !containsUser(cfg.Discord.AllowedUserIDs, userID) {
 		c.mu.Unlock()
 		c.threadMu.Unlock()
 		c.respondEphemeral(interaction, "Sem permissão.")
@@ -205,9 +218,6 @@ func (c *Channel) handleBind(ctx context.Context, interaction *discordgo.Interac
 		oldChannelID := cfg.Discord.ChannelID
 		cfg.Discord.ChannelID = interaction.ChannelID
 		cfg.Discord.GuildID = interaction.GuildID
-		if len(cfg.Discord.AllowedUserIDs) == 0 {
-			cfg.Discord.AllowedUserIDs = []string{userID}
-		}
 		err = config.Save(c.home, cfg)
 		if err == nil {
 			c.cfg = cfg
@@ -230,28 +240,18 @@ func (c *Channel) handleBind(ctx context.Context, interaction *discordgo.Interac
 	c.respondEphemeral(interaction, fmt.Sprintf("Computador %s vinculado a este canal. As sessões aparecerão em threads aqui.", c.machine))
 }
 
-func (c *Channel) ownedChannel(ctx context.Context, client api, channelID string) (string, bool) {
+func (c *Channel) ownedChannel(channelID string) (string, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	bound := c.cfg.Discord.ChannelID
-	sessionID, knownThread := c.threadIDs[channelID]
-	c.mu.Unlock()
 	if bound == "" || channelID == "" {
 		return "", false
 	}
 	if channelID == bound {
 		return "", true
 	}
-	if knownThread {
-		return sessionID, true
-	}
-	remote, err := c.lookupChannel(ctx, client, channelID)
-	if err != nil || !isThreadType(remote.Type) || remote.ParentID != bound {
-		return "", false
-	}
-	c.mu.Lock()
-	sessionID = c.threadIDs[channelID]
-	c.mu.Unlock()
-	return sessionID, true
+	sessionID, knownThread := c.threadIDs[channelID]
+	return sessionID, knownThread
 }
 
 func (c *Channel) lookupChannel(_ context.Context, client api, channelID string) (*discordgo.Channel, error) {
@@ -278,10 +278,7 @@ func (c *Channel) allowedUser(userID string) bool {
 	c.mu.Lock()
 	allowed := append([]string(nil), c.cfg.Discord.AllowedUserIDs...)
 	c.mu.Unlock()
-	if len(allowed) == 0 {
-		return true
-	}
-	return containsUser(allowed, userID)
+	return len(allowed) > 0 && containsUser(allowed, userID)
 }
 
 func containsUser(users []string, target string) bool {

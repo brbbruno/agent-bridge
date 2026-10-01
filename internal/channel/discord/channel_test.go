@@ -178,6 +178,11 @@ func TestThreadCreationPersistenceReuseAndName(t *testing.T) {
 	if len(client.threads) != 1 || client.sends[1].channelID != client.threads[0].ID {
 		t.Fatalf("thread persistida não foi reutilizada: threads=%d sends=%+v", len(client.threads), client.sends)
 	}
+	var received channel.Update
+	reloaded.handleMessage(context.Background(), &discordgo.MessageCreate{Message: &discordgo.Message{ID: "9", ChannelID: client.threads[0].ID, Author: &discordgo.User{ID: "owner"}, Content: "resposta"}}, func(_ context.Context, update channel.Update) { received = update })
+	if received.SessionID != ref.ID || received.Text != "resposta" {
+		t.Fatalf("thread recarregada não foi reconhecida: %+v", received)
+	}
 	if got := threadName(channel.SessionRef{ID: "id", Name: "nome", Title: strings.Repeat("á", 120)}); utf8.RuneCountInString(got) != 100 {
 		t.Fatalf("nome da thread tem %d runes", utf8.RuneCountInString(got))
 	}
@@ -273,6 +278,7 @@ func TestVincularMachineAndAllowlistedRebinding(t *testing.T) {
 	cfg := config.Default()
 	cfg.MachineName = "PC-TESTE"
 	cfg.Discord.BotToken = "token"
+	cfg.Discord.AllowedUserIDs = []string{"owner"}
 	if err := config.Save(home, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -534,6 +540,7 @@ func TestVincularIgnoresOtherMachineAndOnlyOwnersCanRebind(t *testing.T) {
 	cfg := config.Default()
 	cfg.MachineName = "PC-TESTE"
 	cfg.Discord.BotToken = "fake-token"
+	cfg.Discord.AllowedUserIDs = []string{"owner"}
 	if err := config.Save(home, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +579,10 @@ func TestVincularIgnoresOtherMachineAndOnlyOwnersCanRebind(t *testing.T) {
 
 func TestThreadBindingAndUnownedChannelAreRejectedCorrectly(t *testing.T) {
 	client := newFakeAPI()
-	discord, _ := testBoundChannel(t, client)
+	discord, home := testBoundChannel(t, client)
+	if err := config.Save(home, discord.cfg); err != nil {
+		t.Fatal(err)
+	}
 	client.channels["thread"] = &discordgo.Channel{ID: "thread", ParentID: "bound", GuildID: "guild", Type: discordgo.ChannelTypeGuildPublicThread}
 	discord.handleInteraction(context.Background(), commandInteraction("bind-thread", "vincular", "thread", "guild", "owner", &discordgo.ApplicationCommandInteractionDataOption{Name: "computador", Value: "PC-TESTE"}), func(context.Context, channel.Update) {})
 	if got := client.responses[len(client.responses)-1].response.Data.Content; got != "Use /vincular em um canal de texto, não em uma thread." {
@@ -583,6 +593,83 @@ func TestThreadBindingAndUnownedChannelAreRejectedCorrectly(t *testing.T) {
 	discord.handleMessage(context.Background(), update, func(context.Context, channel.Update) { handled = true })
 	if handled {
 		t.Fatal("mensagem de outro canal foi roteada")
+	}
+}
+
+func TestEmptyAllowlistDeniesMessagesCommandsComponentsAndBind(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Default()
+	cfg.MachineName = "PC-TESTE"
+	cfg.Discord.BotToken = "fake-token"
+	cfg.Discord.GuildID = "guild"
+	cfg.Discord.ChannelID = "bound"
+	if err := config.Save(home, cfg); err != nil {
+		t.Fatal(err)
+	}
+	client := newFakeAPI()
+	client.channels["bound"] = &discordgo.Channel{ID: "bound", GuildID: "guild", Type: discordgo.ChannelTypeGuildText}
+	client.channels["text"] = &discordgo.Channel{ID: "text", GuildID: "guild", Type: discordgo.ChannelTypeGuildText}
+	discord := newChannel(home, cfg, client)
+	discord.SetLogger(logx.New(filepath.Join(home, "discord.log")))
+	handled := 0
+	handle := func(context.Context, channel.Update) { handled++ }
+	discord.handleMessage(context.Background(), &discordgo.MessageCreate{Message: &discordgo.Message{ID: "message", ChannelID: "bound", Author: &discordgo.User{ID: "untrusted"}, Content: "ignore"}}, handle)
+	discord.handleInteraction(context.Background(), commandInteraction("command", "status", "bound", "guild", "untrusted"), handle)
+	discord.handleInteraction(context.Background(), &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID: "component", Type: discordgo.InteractionMessageComponent, ChannelID: "bound", GuildID: "guild",
+		Member: &discordgo.Member{User: &discordgo.User{ID: "untrusted"}},
+		Data:   discordgo.MessageComponentInteractionData{CustomID: "pending", ComponentType: discordgo.ButtonComponent},
+	}}, handle)
+	discord.handleInteraction(context.Background(), &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID: "modal", Type: discordgo.InteractionModalSubmit, ChannelID: "bound", GuildID: "guild",
+		Member: &discordgo.Member{User: &discordgo.User{ID: "untrusted"}},
+		Data:   discordgo.ModalSubmitInteractionData{CustomID: "pending"},
+	}}, handle)
+	discord.handleInteraction(context.Background(), commandInteraction("bind", "vincular", "text", "guild", "untrusted", &discordgo.ApplicationCommandInteractionDataOption{Name: "computador", Value: "PC-TESTE"}), handle)
+	if handled != 0 {
+		t.Fatalf("interação sem usuário autorizado foi roteada %d vezes", handled)
+	}
+	if len(client.responses) != 4 {
+		t.Fatalf("respostas para comandos/componentes/modal/vincular=%+v", client.responses)
+	}
+	for index := 0; index < 3; index++ {
+		response := client.responses[index].response
+		if response.Data.Content != "Sem permissão." || response.Data.Flags != discordgo.MessageFlagsEphemeral {
+			t.Fatalf("resposta %d para usuário não autorizado=%+v", index, response)
+		}
+	}
+	if got := client.responses[3].response.Data.Content; got != "Nenhum usuário autorizado. Execute agent-bridge setup discord neste computador." {
+		t.Fatalf("resposta a vínculo sem usuário autorizado=%q", got)
+	}
+	loaded, err := config.Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Discord.ChannelID != "bound" || len(loaded.Discord.AllowedUserIDs) != 0 {
+		t.Fatalf("vínculo alterado sem usuário autorizado: %+v", loaded.Discord)
+	}
+}
+
+func TestUnknownParentThreadsIgnoreMessagesComponentsAndModals(t *testing.T) {
+	client := newFakeAPI()
+	discord, _ := testBoundChannel(t, client)
+	client.channels["unknown-thread"] = &discordgo.Channel{ID: "unknown-thread", GuildID: "guild", ParentID: "bound", Type: discordgo.ChannelTypeGuildPublicThread}
+	handled := 0
+	handle := func(context.Context, channel.Update) { handled++ }
+	discord.handleMessage(context.Background(), &discordgo.MessageCreate{Message: &discordgo.Message{ID: "message", ChannelID: "unknown-thread", Author: &discordgo.User{ID: "owner"}, Content: "ignore"}}, handle)
+	discord.handleInteraction(context.Background(), &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID: "component", Type: discordgo.InteractionMessageComponent, ChannelID: "unknown-thread", GuildID: "guild",
+		Member:  &discordgo.Member{User: &discordgo.User{ID: "owner"}},
+		Message: &discordgo.Message{ID: "message", ChannelID: "unknown-thread"},
+		Data:    discordgo.MessageComponentInteractionData{CustomID: "pending", ComponentType: discordgo.ButtonComponent},
+	}}, handle)
+	discord.handleInteraction(context.Background(), &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID: "modal", Type: discordgo.InteractionModalSubmit, ChannelID: "unknown-thread", GuildID: "guild",
+		Member: &discordgo.Member{User: &discordgo.User{ID: "owner"}},
+		Data:   discordgo.ModalSubmitInteractionData{CustomID: "pending"},
+	}}, handle)
+	if handled != 0 || len(client.responses) != 0 {
+		t.Fatalf("thread desconhecida foi tratada: handled=%d responses=%+v", handled, client.responses)
 	}
 }
 

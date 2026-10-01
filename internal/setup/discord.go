@@ -65,7 +65,22 @@ func discordWithTerminal(ctx context.Context, home string, cfg config.Config, ou
 	if err := discordGET(ctx, client, baseURL, botToken, "/oauth2/applications/@me", &app); err != nil {
 		return cfg, fmt.Errorf("validar aplicação do Discord: %w", err)
 	}
+	fmt.Fprint(output, "Seu ID de usuário do Discord (Configurações > Avançado > Modo desenvolvedor; clique no seu nome > Copiar ID do usuário): ")
+	userID, err := terminal.ReadLine()
+	if err != nil {
+		return cfg, fmt.Errorf("ler ID de usuário do Discord: %w", err)
+	}
+	userID = strings.TrimSpace(userID)
+	if !validDiscordUserID(userID) {
+		return cfg, errors.New("ID de usuário do Discord inválido: informe de 17 a 20 dígitos")
+	}
+	var authorizedUser discordUser
+	if err := discordGET(ctx, client, baseURL, botToken, "/users/"+userID, &authorizedUser); err != nil {
+		return cfg, fmt.Errorf("validar usuário autorizado do Discord: %w", err)
+	}
+	fmt.Fprintf(output, "Usuário autorizado: %s\n", authorizedUser.Username)
 	cfg.Discord.BotToken = botToken
+	cfg.Discord.AllowedUserIDs = []string{userID}
 	if err := config.Save(home, cfg); err != nil {
 		return cfg, fmt.Errorf("salvar configuração do Discord: %w", err)
 	}
@@ -74,8 +89,21 @@ func discordWithTerminal(ctx context.Context, home string, cfg config.Config, ou
 		fmt.Fprintln(output, "Aviso: habilite Message Content Intent no Developer Portal para que mensagens de texto sejam recebidas.")
 	}
 	fmt.Fprintf(output, "Convide o bot: https://discord.com/oauth2/authorize?client_id=%s&scope=bot%%20applications.commands&permissions=326417583104\n", app.ID)
-	fmt.Fprintln(output, "Convide o bot ao servidor, execute agent-bridge daemon stop e, no canal desejado, use /vincular computador:<nome deste computador>.")
+	fmt.Fprintln(output, "Convide o bot ao servidor, execute agent-bridge daemon stop e, no canal desejado, use /vincular computador:<nome deste computador>. Somente o usuário autorizado pode vincular e responder.")
+	fmt.Fprintln(output, "As threads ficam visíveis a quem pode ver o canal; prefira um canal privado.")
 	return cfg, nil
+}
+
+func validDiscordUserID(value string) bool {
+	if len(value) < 17 || len(value) > 20 {
+		return false
+	}
+	for _, digit := range value {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func discordGET(ctx context.Context, client *http.Client, baseURL, token, path string, output any) error {

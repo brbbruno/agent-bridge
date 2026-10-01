@@ -2,12 +2,15 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/brbbruno/agent-bridge/internal/config"
+	"github.com/brbbruno/agent-bridge/internal/daemon"
+	"github.com/brbbruno/agent-bridge/internal/logx"
 	"github.com/brbbruno/agent-bridge/internal/model"
 )
 
@@ -92,6 +95,51 @@ func TestParseProgressEventsAndEncode(t *testing.T) {
 	}
 	if encoded, err := Encode(model.AgentDevin, model.EventProgress, model.Resolution{Action: model.ActionNone}); err != nil || len(encoded) != 0 {
 		t.Fatalf("progress hook output=%q err=%v", encoded, err)
+	}
+}
+
+func TestProgressHookSkipsDaemonWithoutDiscord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENT_BRIDGE_HOME", home)
+	if err := config.Save(home, config.Default()); err != nil {
+		t.Fatal(err)
+	}
+	original := ensureDaemonRunning
+	t.Cleanup(func() { ensureDaemonRunning = original })
+	called := false
+	ensureDaemonRunning = func(string, config.Config, *logx.Logger) (*daemon.Client, error) {
+		called = true
+		return nil, errors.New("unexpected daemon call")
+	}
+	payload := []byte(`{"session_id":"session","tool_name":"exec","tool_input":{"command":"go test ./..."}}`)
+	output := Execute(model.EventProgress, model.AgentDevin, payload, nil)
+	if len(output) != 0 || called {
+		t.Fatalf("progress sem Discord chamou o daemon=%t ou produziu saída %q", called, output)
+	}
+	if _, err := os.Stat(config.TokenPath(home)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("progress sem Discord criou token de daemon: %v", err)
+	}
+}
+
+func TestProgressHookUsesDaemonWithDiscord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENT_BRIDGE_HOME", home)
+	cfg := config.Default()
+	cfg.Discord.BotToken = "fake-discord-token"
+	if err := config.Save(home, cfg); err != nil {
+		t.Fatal(err)
+	}
+	original := ensureDaemonRunning
+	t.Cleanup(func() { ensureDaemonRunning = original })
+	calls := 0
+	ensureDaemonRunning = func(string, config.Config, *logx.Logger) (*daemon.Client, error) {
+		calls++
+		return nil, errors.New("test daemon unavailable")
+	}
+	payload := []byte(`{"session_id":"session","tool_name":"exec","tool_input":{"command":"go test ./..."}}`)
+	output := Execute(model.EventProgress, model.AgentDevin, payload, nil)
+	if calls != 1 || len(output) != 0 {
+		t.Fatalf("progress com Discord: calls=%d output=%q", calls, output)
 	}
 }
 

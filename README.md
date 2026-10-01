@@ -25,10 +25,10 @@ go build -o agent-bridge ./cmd/agent-bridge
 ## Configurar o Discord
 
 1. No Discord Developer Portal, crie uma aplicação e um bot; habilite **Message Content Intent** nas opções do bot.
-2. Execute `agent-bridge setup discord`. O token é solicitado sem eco na tela; o comando valida o bot e imprime o convite para o servidor.
+2. Execute `agent-bridge setup discord`. O token é solicitado sem eco na tela. Informe também seu ID de usuário, que pode ser copiado em Configurações > Avançado > Modo desenvolvedor, clicando no seu nome.
 3. Convide o bot. Depois do próximo início do daemon, execute `/vincular computador:<nome>` no canal de texto desejado. O nome é o `machine_name` configurado ou o hostname.
 
-Cada computador vincula seu daemon ao canal de sua escolha, por exemplo `#empresa` ou `#pessoal`. Cada sessão aparece em uma thread no canal vinculado. O usuário que vinculou o computador é o único autorizado a responder. Quando Telegram e Discord estão configurados juntos, as solicitações vão aos dois; a primeira resposta vence e as mensagens nos outros canais são atualizadas com a origem da resposta. Comandos disponíveis no Discord: `/away`, `/back`, `/status`, `/list` e `/vincular`.
+Somente o ID informado durante a configuração pode vincular o computador, responder a solicitações e usar os comandos do bot. Cada computador vincula seu daemon ao canal de sua escolha; cada sessão aparece em uma thread. Threads são visíveis a qualquer pessoa que possa ver o canal, então prefira um canal privado. Quando Telegram e Discord estão configurados juntos, as solicitações vão aos dois; a primeira resposta vence e as mensagens nos outros canais são atualizadas com a origem da resposta. Comandos disponíveis no Discord: `/away`, `/back`, `/status`, `/list` e `/vincular`.
 
 ### Painel de andamento
 
