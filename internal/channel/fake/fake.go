@@ -36,6 +36,7 @@ type Fake struct {
 	Edits         []EditRecord
 	Callbacks     []string
 	CallbackTexts []string
+	Actions       []string
 	UpdatesCh     chan channel.Update
 }
 
@@ -76,9 +77,15 @@ func (f *Fake) Send(_ context.Context, message channel.Outgoing) (channel.SentMe
 	return f.send(message, false, false, "")
 }
 
-func (f *Fake) RequestText(_ context.Context, _ channel.Update, session channel.SessionRef, prompt, token string) (channel.SentMessage, error) {
+func (f *Fake) RequestText(ctx context.Context, update channel.Update, session channel.SessionRef, prompt, token string) (channel.SentMessage, error) {
+	f.mu.Lock()
+	f.Actions = append(f.Actions, "request-text")
+	f.mu.Unlock()
 	message := channel.Outgoing{Session: session, Text: prompt}
 	if f.Name() == "Telegram" {
+		if err := f.AnswerCallback(ctx, update, "Responda em seguida."); err != nil {
+			return channel.SentMessage{}, err
+		}
 		return f.send(message, true, true, token)
 	}
 	f.mu.Lock()
@@ -131,6 +138,7 @@ func (f *Fake) AnswerCallback(_ context.Context, update channel.Update, text str
 	defer f.mu.Unlock()
 	f.Callbacks = append(f.Callbacks, update.CallbackID)
 	f.CallbackTexts = append(f.CallbackTexts, text)
+	f.Actions = append(f.Actions, "answer-callback")
 	return nil
 }
 
@@ -159,6 +167,12 @@ func (f *Fake) CallbackSnapshot() ([]string, []string) {
 	callbacks := append([]string(nil), f.Callbacks...)
 	texts := append([]string(nil), f.CallbackTexts...)
 	return callbacks, texts
+}
+
+func (f *Fake) ActionSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.Actions...)
 }
 
 func splitText(text string, limit int) []string {

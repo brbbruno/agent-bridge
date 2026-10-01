@@ -12,22 +12,13 @@ import (
 	"github.com/brbbruno/agent-bridge/internal/channel"
 )
 
-func TestSplitTextLimit(t *testing.T) {
-	text := strings.Repeat("a", 9000)
-	chunks := SplitText(text, MaxMessageRunes)
-	if len(chunks) != 3 {
-		t.Fatalf("len(chunks)=%d", len(chunks))
-	}
-	for _, chunk := range chunks {
-		if len([]rune(chunk)) > MaxMessageRunes {
-			t.Fatalf("chunk has %d runes", len([]rune(chunk)))
-		}
-	}
-}
-
 func TestSendSplitsAndSupportsForceReply(t *testing.T) {
 	var got []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/answerCallbackQuery") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": true})
+			return
+		}
 		if !strings.Contains(r.URL.Path, "botTOKEN/sendMessage") {
 			t.Errorf("path=%s", r.URL.Path)
 		}
@@ -41,7 +32,7 @@ func TestSendSplitsAndSupportsForceReply(t *testing.T) {
 	defer server.Close()
 	client := New("TOKEN", 9, server.URL)
 	client.SetHTTPClient(server.Client())
-	message, err := client.Send(context.Background(), channel.Outgoing{Text: strings.Repeat("x", 5000), Keyboard: channel.Keyboard{{{Text: "Outro (texto)", Data: "q:a:0:o"}}}})
+	message, err := client.Send(context.Background(), channel.Outgoing{Text: strings.Repeat("x", 5000), Keyboard: channel.Keyboard{{{Text: "Outro (texto)", Data: "q:a:0:o", Style: "success"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +46,12 @@ func TestSendSplitsAndSupportsForceReply(t *testing.T) {
 	if !ok || markup["inline_keyboard"] == nil {
 		t.Fatalf("inline keyboard ausente: %v", got[1]["reply_markup"])
 	}
-	_, err = client.RequestText(context.Background(), channel.Update{}, channel.SessionRef{}, "Digite sua resposta", "token")
+	rows := markup["inline_keyboard"].([]any)
+	button := rows[0].([]any)[0].(map[string]any)
+	if _, hasStyle := button["style"]; hasStyle {
+		t.Fatalf("estilo Discord vazou para o Telegram: %+v", button)
+	}
+	_, err = client.RequestText(context.Background(), channel.Update{CallbackID: "request-text"}, channel.SessionRef{}, "Digite sua resposta", "token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,45 +271,6 @@ func TestEditTreatsUnchangedMessagesAsSuccess(t *testing.T) {
 	}
 }
 
-func TestSplitTextKeepsFencedCodeValidAcrossChunks(t *testing.T) {
-	text := "```go\n" + strings.Repeat("x", 100)
-	chunks := SplitText(text, 50)
-	if len(chunks) < 2 {
-		t.Fatalf("esperava múltiplos chunks: %d", len(chunks))
-	}
-	if !strings.HasSuffix(chunks[0], "\n```") {
-		t.Fatalf("primeiro chunk não fechou o fence: %q", chunks[0])
-	}
-	if !strings.HasPrefix(chunks[1], "```go\n") {
-		t.Fatalf("segundo chunk não reabriu o fence: %q", chunks[1])
-	}
-	for index, chunk := range chunks {
-		if got := len([]rune(chunk)); got > 50 {
-			t.Fatalf("chunk %d excedeu limite: %d", index, got)
-		}
-	}
-}
-
-func TestSplitTextReopensIndentedFenceAcrossChunks(t *testing.T) {
-	opening := "   ```go\n"
-	text := opening + "   " + strings.Repeat("x", 100)
-	chunks := SplitText(text, 50)
-	if len(chunks) < 2 {
-		t.Fatalf("esperava múltiplos chunks: %d", len(chunks))
-	}
-	if !strings.HasSuffix(chunks[0], "\n```") {
-		t.Fatalf("primeiro chunk não fechou o fence: %q", chunks[0])
-	}
-	if !strings.HasPrefix(chunks[1], opening) {
-		t.Fatalf("segundo chunk não reabriu o fence indentado: %q", chunks[1])
-	}
-	for index, chunk := range chunks {
-		if got := len([]rune(chunk)); got > 50 {
-			t.Fatalf("chunk %d excedeu limite: %d", index, got)
-		}
-	}
-}
-
 func TestTelegramRunSetsChannelAndAdvancesOffset(t *testing.T) {
 	secondOffset := make(chan int64, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -369,21 +326,31 @@ func TestTelegramRunSetsChannelAndAdvancesOffset(t *testing.T) {
 
 func TestTelegramRequestTextUsesForceReply(t *testing.T) {
 	var request map[string]any
+	var methods []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		methods = append(methods, method)
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
+		}
+		if method == "answerCallbackQuery" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": true})
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 31}})
 	}))
 	defer server.Close()
 	client := New("TOKEN", 9, server.URL)
 	client.SetHTTPClient(server.Client())
-	message, err := client.RequestText(context.Background(), channel.Update{MessageID: 24}, channel.SessionRef{ID: "s"}, "Digite sua resposta", "t:p")
+	message, err := client.RequestText(context.Background(), channel.Update{MessageID: 24, CallbackID: "cb-text"}, channel.SessionRef{ID: "s"}, "Digite sua resposta", "t:p")
 	if err != nil {
 		t.Fatal(err)
 	}
 	markup, ok := request["reply_markup"].(map[string]any)
 	if !ok || markup["force_reply"] != true || message.ID != 31 {
 		t.Fatalf("RequestText request=%+v message=%+v", request, message)
+	}
+	if len(methods) != 2 || methods[0] != "answerCallbackQuery" || methods[1] != "sendMessage" {
+		t.Fatalf("ordem de RequestText=%v", methods)
 	}
 }

@@ -18,9 +18,17 @@ type Telegram struct {
 	APIBase  string `json:"api_base"`
 }
 
+type Discord struct {
+	BotToken       string   `json:"bot_token,omitempty"`
+	GuildID        string   `json:"guild_id,omitempty"`
+	ChannelID      string   `json:"channel_id,omitempty"`
+	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
+}
+
 type Config struct {
 	Channel            string        `json:"channel"`
 	Telegram           Telegram      `json:"telegram"`
+	Discord            Discord       `json:"discord"`
 	Port               int           `json:"port"`
 	StopWait           time.Duration `json:"-"`
 	PermissionWait     time.Duration `json:"-"`
@@ -31,6 +39,17 @@ type Config struct {
 	NotifyWhenPresent  bool          `json:"notify_when_present"`
 	MachineName        string        `json:"machine_name,omitempty"`
 	DevinExe           string        `json:"devin_exe,omitempty"`
+}
+
+func MachineName(cfg Config) string {
+	if machine := strings.TrimSpace(cfg.MachineName); machine != "" {
+		return machine
+	}
+	machine, _ := os.Hostname()
+	if machine = strings.TrimSpace(machine); machine != "" {
+		return machine
+	}
+	return "computador"
 }
 
 func Default() Config {

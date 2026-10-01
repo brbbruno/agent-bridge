@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -69,14 +68,7 @@ func NewRouter(home string, cfg config.Config, channels []channel.Channel, logge
 	if err != nil {
 		return nil, err
 	}
-	machine := strings.TrimSpace(cfg.MachineName)
-	if machine == "" {
-		machine, _ = os.Hostname()
-		machine = strings.TrimSpace(machine)
-		if machine == "" {
-			machine = "computador"
-		}
-	}
+	machine := config.MachineName(cfg)
 	channels = filterChannels(channels)
 	channelByName := make(map[string]channel.Channel, len(channels))
 	for _, ch := range channels {
@@ -272,8 +264,8 @@ func (r *Router) waitForUser(ctx context.Context, event model.Event) model.Resol
 		keyboard := channel.Keyboard(nil)
 		if event.Type == model.EventPermission {
 			keyboard = channel.Keyboard{{
-				{Text: "Aprovar", Data: "p:" + p.id + ":a"},
-				{Text: "Negar", Data: "p:" + p.id + ":d"},
+				{Text: "Aprovar", Data: "p:" + p.id + ":a", Style: "success"},
+				{Text: "Negar", Data: "p:" + p.id + ":d", Style: "danger"},
 				{Text: "Negar com instrução", Data: "p:" + p.id + ":i"},
 			}}
 		}
@@ -386,7 +378,7 @@ func (r *Router) HandleUpdate(ctx context.Context, update channel.Update) {
 	if r.channelFor(update) == nil || update.Ignored {
 		return
 	}
-	if update.CallbackID != "" {
+	if update.CallbackID != "" && strings.TrimSpace(update.Text) == "" && update.TextToken == "" {
 		r.handleCallback(ctx, update)
 		return
 	}
@@ -425,11 +417,12 @@ func (r *Router) handlePermissionCallback(ctx context.Context, update channel.Up
 		return
 	}
 	r.mu.Unlock()
-	_ = r.answerCallback(ctx, update, "Resposta recebida.")
 	switch action {
 	case "a":
+		_ = r.answerCallback(ctx, update, "Resposta recebida.")
 		r.deliver(p, model.Resolution{Action: model.ActionApprove}, update.Channel)
 	case "d":
+		_ = r.answerCallback(ctx, update, "Resposta recebida.")
 		r.deliver(p, model.Resolution{Action: model.ActionDeny, Reason: "O usuário negou a aprovação pelo " + update.Channel + "."}, update.Channel)
 	case "i":
 		r.mu.Lock()
@@ -468,7 +461,6 @@ func (r *Router) handleQuestionCallback(ctx context.Context, update channel.Upda
 		p.awaitingText = "question"
 		p.awaitingQuestion = questionIndex
 		r.mu.Unlock()
-		_ = r.answerCallback(ctx, update, "Responda em seguida.")
 		prompt := "Outro (texto) — responda à pergunta: " + question.Text
 		ch := r.channelFor(update)
 		message, err := ch.RequestText(ctx, update, r.sessionRef(p.event), prompt, "t:"+p.id)
@@ -540,7 +532,6 @@ func (r *Router) handleRouteCallback(ctx context.Context, update channel.Update,
 	}
 	p.awaitingText = "route"
 	r.mu.Unlock()
-	_ = r.answerCallback(ctx, update, "Responda à sessão selecionada.")
 	prompt := "Digite a mensagem para a sessão selecionada:"
 	ch := r.channelFor(update)
 	message, err := ch.RequestText(ctx, update, r.sessionRef(p.event), prompt, "t:"+p.id)
@@ -1035,6 +1026,7 @@ func (r *Router) reply(ctx context.Context, update channel.Update, text string, 
 }
 
 func (r *Router) replyOutgoing(ctx context.Context, update channel.Update, message channel.Outgoing) channel.SentMessage {
+	message.Origin = &update
 	ch := r.channelFor(update)
 	if ch == nil {
 		return channel.SentMessage{}

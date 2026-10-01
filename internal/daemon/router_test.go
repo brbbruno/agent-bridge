@@ -119,6 +119,9 @@ func TestMultipleWaitingSessionsShowPickerAndRouteReply(t *testing.T) {
 		t.Fatalf("callback inesperado: %s", selected)
 	}
 	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "cb-route", CallbackData: selected})
+	if actions := fake.ActionSnapshot(); len(actions) != 2 || actions[0] != "request-text" || actions[1] != "answer-callback" {
+		t.Fatalf("RequestText deve reconhecer o callback antes do envio: %v", actions)
+	}
 	sent = waitForSent(t, fake, 4)
 	if !sent[3].ForceReply {
 		t.Fatal("esperava ForceReply após escolher sessão")
@@ -168,6 +171,9 @@ func TestPermissionDenyWithInstructionAndQuestionOther(t *testing.T) {
 	}
 	instructionButton := sent[0].Keyboard[0][2]
 	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "cb-deny", CallbackData: instructionButton.Data})
+	if actions := fake.ActionSnapshot(); len(actions) < 2 || actions[0] != "request-text" || actions[1] != "answer-callback" {
+		t.Fatalf("RequestText de permissão adiantou callback: %v", actions)
+	}
 	sent = waitForSent(t, fake, 2)
 	if !sent[1].ForceReply {
 		t.Fatal("esperava force reply para instrução de negação")
@@ -187,6 +193,9 @@ func TestPermissionDenyWithInstructionAndQuestionOther(t *testing.T) {
 	}
 	otherButton := sent[2].Keyboard[len(sent[2].Keyboard)-1][0]
 	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, CallbackID: "cb-other", CallbackData: otherButton.Data})
+	if actions := fake.ActionSnapshot(); len(actions) != 4 || actions[2] != "request-text" || actions[3] != "answer-callback" {
+		t.Fatalf("RequestText de pergunta adiantou callback: %v", actions)
+	}
 	sent = waitForSent(t, fake, 4)
 	if !sent[3].ForceReply {
 		t.Fatal("Outro (texto) deve abrir ForceReply")
@@ -376,6 +385,9 @@ func TestMultiChannelPermissionFirstAnswerWins(t *testing.T) {
 	if len(telegramMessages[0].Keyboard) == 0 || len(discordMessages[0].Keyboard) == 0 {
 		t.Fatal("aprovação não foi enviada com botões aos dois canais")
 	}
+	if telegramMessages[0].Keyboard[0][0].Style != "success" || telegramMessages[0].Keyboard[0][1].Style != "danger" {
+		t.Fatalf("estilos de aprovação=%+v", telegramMessages[0].Keyboard)
+	}
 	approve := discordMessages[0].Keyboard[0][0]
 	router.HandleUpdate(context.Background(), channel.Update{Channel: "Discord", CallbackID: "discord-approve", CallbackData: approve.Data})
 	if got := <-result; got.Action != model.ActionApprove {
@@ -414,6 +426,9 @@ func TestMultiChannelQuestionRequestsTextOnlyFromOrigin(t *testing.T) {
 	discordMessages := waitForSent(t, discord, 1)
 	other := discordMessages[0].Keyboard[len(discordMessages[0].Keyboard)-1][0]
 	router.HandleUpdate(context.Background(), channel.Update{Channel: "Discord", CallbackID: "discord-other", CallbackData: other.Data})
+	if actions := discord.ActionSnapshot(); len(actions) != 1 || actions[0] != "request-text" {
+		t.Fatalf("callback foi respondido antes do modal: %v", actions)
+	}
 	discordRequests, _ := discord.Snapshot()
 	var token string
 	for _, request := range discordRequests {

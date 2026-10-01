@@ -5,8 +5,9 @@ import "context"
 const MaxMessageRunes = 4096
 
 type Button struct {
-	Text string `json:"text"`
-	Data string `json:"data"`
+	Text  string `json:"text"`
+	Data  string `json:"data"`
+	Style string `json:"style,omitempty"`
 }
 
 type Keyboard [][]Button
@@ -24,6 +25,7 @@ type Outgoing struct {
 	Text     string
 	Keyboard Keyboard
 	ReplyTo  int64
+	Origin   *Update
 }
 
 type MessageKey struct {

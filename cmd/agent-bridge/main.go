@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/brbbruno/agent-bridge/internal/channel"
+	discordchannel "github.com/brbbruno/agent-bridge/internal/channel/discord"
 	"github.com/brbbruno/agent-bridge/internal/channel/telegram"
 	"github.com/brbbruno/agent-bridge/internal/config"
 	"github.com/brbbruno/agent-bridge/internal/daemon"
@@ -206,6 +207,11 @@ func runDaemonForeground() error {
 		bot.SetLogger(logger)
 		channels = append(channels, bot)
 	}
+	if cfg.Discord.BotToken != "" {
+		discord := discordchannel.New(home, cfg)
+		discord.SetLogger(logger)
+		channels = append(channels, discord)
+	}
 	server, err := daemon.NewServer(home, cfg, token, channels, logger)
 	if err != nil {
 		return err
@@ -285,8 +291,8 @@ func runTest() int {
 }
 
 func runSetup(args []string) int {
-	if len(args) != 1 || args[0] != "telegram" {
-		fmt.Fprintln(os.Stderr, "Uso: agent-bridge setup telegram")
+	if len(args) != 1 || (args[0] != "telegram" && args[0] != "discord") {
+		fmt.Fprintln(os.Stderr, "Uso: agent-bridge setup telegram|discord")
 		return 2
 	}
 	home, cfg, _, err := loadRuntime()
@@ -295,13 +301,18 @@ func runSetup(args []string) int {
 		return 1
 	}
 	if err := stopExistingDaemon(home, cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "Não é possível configurar o Telegram:", err)
+		fmt.Fprintf(os.Stderr, "Não é possível configurar o %s: %v\n", args[0], err)
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute+20*time.Second)
 	defer cancel()
-	if _, err := setup.Telegram(ctx, home, cfg, os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "Falha na configuração do Telegram:", err)
+	if args[0] == "telegram" {
+		if _, err := setup.Telegram(ctx, home, cfg, os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "Falha na configuração do Telegram:", err)
+			return 1
+		}
+	} else if _, err := setup.Discord(ctx, home, cfg, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "Falha na configuração do Discord:", err)
 		return 1
 	}
 	fmt.Fprintln(os.Stdout, "Configuração concluída.")
@@ -435,10 +446,10 @@ func printStatus(status daemon.Status) {
 }
 
 func printHelp(output io.Writer) {
-	fmt.Fprintln(output, `agent-bridge — ponte de hooks do agente para o Telegram
+	fmt.Fprintln(output, `agent-bridge — ponte de hooks do agente para Telegram e Discord
 
 Uso:
-  agent-bridge setup telegram
+  agent-bridge setup telegram|discord
   agent-bridge install --agent devin|claude --scope user|project [--project-dir DIR]
   agent-bridge uninstall --agent devin|claude --scope user|project [--project-dir DIR]
   agent-bridge away on|off|status

@@ -29,6 +29,7 @@ func TestSaveLoadAndPrivateConfigMode(t *testing.T) {
 	cfg := Default()
 	cfg.Telegram.BotToken = "not-a-real-token"
 	cfg.Telegram.ChatID = 55
+	cfg.Discord = Discord{BotToken: "not-a-real-discord-token", GuildID: "guild", ChannelID: "channel", AllowedUserIDs: []string{"user"}}
 	cfg.StopWaitText = "4s"
 	cfg.PermissionWaitText = "5s"
 	cfg.QuestionWaitText = "6s"
@@ -39,7 +40,7 @@ func TestSaveLoadAndPrivateConfigMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Telegram.ChatID != 55 || loaded.Telegram.BotToken != cfg.Telegram.BotToken || loaded.StopWait != 4*time.Second || loaded.PermissionWait != 5*time.Second || loaded.QuestionWait != 6*time.Second {
+	if loaded.Telegram.ChatID != 55 || loaded.Telegram.BotToken != cfg.Telegram.BotToken || loaded.Discord.BotToken != cfg.Discord.BotToken || loaded.Discord.ChannelID != cfg.Discord.ChannelID || len(loaded.Discord.AllowedUserIDs) != 1 || loaded.StopWait != 4*time.Second || loaded.PermissionWait != 5*time.Second || loaded.QuestionWait != 6*time.Second {
 		t.Fatalf("configuração carregada incorretamente: %+v", loaded)
 	}
 	data, err := os.ReadFile(ConfigPath(home))
@@ -61,6 +62,15 @@ func TestSaveLoadAndPrivateConfigMode(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("config mode=%o", info.Mode().Perm())
 		}
+	}
+}
+
+func TestMachineNamePrefersConfiguredNickname(t *testing.T) {
+	if got := MachineName(Config{MachineName: "  PC-TESTE  "}); got != "PC-TESTE" {
+		t.Fatalf("machine name=%q", got)
+	}
+	if got := MachineName(Config{}); got == "" {
+		t.Fatal("hostname fallback está vazio")
 	}
 }
 
