@@ -57,12 +57,12 @@ func Default() Config {
 	return Config{
 		Channel:            "telegram",
 		Port:               DefaultPort,
-		StopWait:           30 * time.Minute,
-		PermissionWait:     10 * time.Minute,
-		QuestionWait:       30 * time.Minute,
-		StopWaitText:       "30m",
-		PermissionWaitText: "10m",
-		QuestionWaitText:   "30m",
+		StopWait:           8 * time.Hour,
+		PermissionWait:     8 * time.Hour,
+		QuestionWait:       8 * time.Hour,
+		StopWaitText:       "8h",
+		PermissionWaitText: "8h",
+		QuestionWaitText:   "8h",
 		NotifyWhenPresent:  true,
 		Telegram:           Telegram{APIBase: "https://api.telegram.org"},
 	}
@@ -112,14 +112,15 @@ func Load(home string) (Config, error) {
 	if cfg.Telegram.APIBase == "" {
 		cfg.Telegram.APIBase = "https://api.telegram.org"
 	}
+	defaults := Default()
 	if cfg.StopWaitText == "" {
-		cfg.StopWaitText = "30m"
+		cfg.StopWaitText = defaults.StopWaitText
 	}
 	if cfg.PermissionWaitText == "" {
-		cfg.PermissionWaitText = "10m"
+		cfg.PermissionWaitText = defaults.PermissionWaitText
 	}
 	if cfg.QuestionWaitText == "" {
-		cfg.QuestionWaitText = "30m"
+		cfg.QuestionWaitText = defaults.QuestionWaitText
 	}
 	if err := cfg.parseDurations(); err != nil {
 		return cfg, err
@@ -167,14 +168,15 @@ func Save(home string, cfg Config) error {
 	if cfg.Port == 0 {
 		cfg.Port = DefaultPort
 	}
+	defaults := Default()
 	if cfg.StopWaitText == "" {
-		cfg.StopWaitText = "30m"
+		cfg.StopWaitText = defaults.StopWaitText
 	}
 	if cfg.PermissionWaitText == "" {
-		cfg.PermissionWaitText = "10m"
+		cfg.PermissionWaitText = defaults.PermissionWaitText
 	}
 	if cfg.QuestionWaitText == "" {
-		cfg.QuestionWaitText = "30m"
+		cfg.QuestionWaitText = defaults.QuestionWaitText
 	}
 	if cfg.Telegram.APIBase == "" {
 		cfg.Telegram.APIBase = "https://api.telegram.org"

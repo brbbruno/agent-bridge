@@ -103,13 +103,15 @@ agent-bridge away off
 agent-bridge away status
 ```
 
-No Telegram, use `/away` e `/back`. Com o modo ausente ativo:
+No Telegram, use `/away` e `/back`. Ative `/away` antes de sair do computador. Com o modo ausente ativo:
 
-- **Stop:** envia a mensagem final completa e espera uma resposta. A resposta volta ao agente como instrução para continuar.
-- **Permissão:** oferece **Aprovar**, **Negar** e **Negar com instrução**. Se ninguém responder, o hook falha aberto e a decisão volta ao computador.
-- **Pergunta:** apresenta cada questão e suas opções; permite selecionar várias opções quando aplicável ou responder em texto. Se expirar, o agente é instruído a repetir as perguntas em texto no fim do turno.
-- **Resposta tardia:** uma resposta à mensagem de um Stop expirado é enfileirada para a próxima parada da mesma sessão.
+- **Stop:** envia a mensagem final completa e espera uma resposta por até `stop_wait` (8 horas por padrão). A sessão fica parada e ocupada no computador enquanto aguarda; a resposta do celular volta ao agente como instrução para continuar.
+- **Permissão:** oferece **Aprovar**, **Negar** e **Negar com instrução** e aguarda por até `permission_wait` (8 horas por padrão). Se o tempo acabar, a decisão volta ao computador.
+- **Pergunta:** apresenta cada questão e suas opções; permite selecionar várias opções quando aplicável ou responder em texto. Aguarda por até `question_wait` (8 horas por padrão); ao expirar, o agente é instruído a repetir as perguntas em texto no fim do turno.
+- **Resposta tardia:** uma resposta a uma solicitação expirada é enfileirada para a próxima parada da mesma sessão.
 - **Contexto do prompt:** avisa ao agente que o usuário está acompanhando pelo celular.
+
+Use `/back` no Telegram ou `agent-bridge away off` no computador para liberar imediatamente todas as esperas em andamento. Se o turno já terminou sem modo ausente, a sessão não pode ser acordada pelo celular: a mensagem fica na fila e o bot informa que será entregue quando a sessão voltar a rodar. Para conversar pelo celular, ative `/away` antes de sair.
 
 Com o modo ausente desligado, o bridge envia notificações sem bloquear o agente. `notify_when_present: false` desativa essas notificações.
 

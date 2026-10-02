@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/brbbruno/agent-bridge/internal/config"
 )
 
 func TestMergeIdempotencyBackupAndUninstallFourTargets(t *testing.T) {
@@ -70,7 +72,7 @@ func TestMergeIdempotencyBackupAndUninstallFourTargets(t *testing.T) {
 			if !strings.Contains(own, `"matcher": "`+questionMatcher+`"`) {
 				t.Fatalf("matcher de pergunta incorreto: %s", own)
 			}
-			if !strings.Contains(own, `"timeout": 1920`) || !strings.Contains(own, `"timeout": 720`) || !strings.Contains(own, `"timeout": 10`) || !strings.Contains(own, `"PostToolUse"`) {
+			if !strings.Contains(own, `"timeout": 28920`) || !strings.Contains(own, `"timeout": 10`) || !strings.Contains(own, `"PostToolUse"`) {
 				t.Fatalf("timeouts ou evento PostToolUse incorretos: %s", own)
 			}
 			if runtime.GOOS == "windows" && !strings.Contains(own, "C:/") {
@@ -108,6 +110,13 @@ func TestMergeIdempotencyBackupAndUninstallFourTargets(t *testing.T) {
 				t.Fatalf("uninstall repetido deveria ser idempotente: %+v, err=%v", secondUninstall, err)
 			}
 		})
+	}
+}
+
+func TestDefaultHookTimeoutsAreEightHoursPlusMargin(t *testing.T) {
+	waits := waitTimeouts(config.Default())
+	if waits["Stop"] != 28920 || waits["PermissionRequest"] != 28920 || waits["PreToolUse"] != 28920 {
+		t.Fatalf("timeouts padrão=%v; esperados 28920 segundos", waits)
 	}
 }
 

@@ -41,7 +41,9 @@ type pending struct {
 	awaitingQuestion    int
 	awaitingTextMessage channel.MessageKey
 	completed           bool
+	finalized           bool
 	resolvedBy          string
+	releaseStatus       string
 }
 
 type Router struct {
@@ -60,6 +62,7 @@ type Router struct {
 	lateMessage      map[channel.MessageKey]lateMessageEntry
 	sessionLabels    map[string]string
 	endedSessions    map[string]time.Time
+	idle             map[string]bool
 	progressPanels   map[string]*progressPanel
 	progressInterval time.Duration
 	idCounter        uint64
@@ -91,6 +94,7 @@ func NewRouter(home string, cfg config.Config, channels []channel.Channel, logge
 		lateMessage:      map[channel.MessageKey]lateMessageEntry{},
 		sessionLabels:    map[string]string{},
 		endedSessions:    map[string]time.Time{},
+		idle:             map[string]bool{},
 		progressPanels:   map[string]*progressPanel{},
 		progressInterval: 3 * time.Second,
 	}, nil
@@ -158,7 +162,14 @@ func (r *Router) rememberPrompt(event model.Event) {
 	}
 }
 
-func (r *Router) HandleEvent(ctx context.Context, event model.Event) model.Resolution {
+func (r *Router) HandleEvent(ctx context.Context, event model.Event) (resolution model.Resolution) {
+	if event.Type == model.EventStop && event.SessionID != "" {
+		defer func() {
+			r.mu.Lock()
+			r.idle[event.SessionID] = resolution.Action != model.ActionBlock
+			r.mu.Unlock()
+		}()
+	}
 	if event.Type == model.EventSessionEnd {
 		r.clearProgressPanel(event.SessionID)
 		r.endSession(event.SessionID)
@@ -166,6 +177,9 @@ func (r *Router) HandleEvent(ctx context.Context, event model.Event) model.Resol
 	}
 	r.mu.Lock()
 	delete(r.endedSessions, event.SessionID)
+	if event.Type != model.EventStop && event.SessionID != "" {
+		r.idle[event.SessionID] = false
+	}
 	r.mu.Unlock()
 	if event.Type == model.EventPrompt {
 		r.dropStaleProgressPanel(event.SessionID)
@@ -299,22 +313,41 @@ func (r *Router) waitForUser(ctx context.Context, event model.Event) model.Resol
 
 	wait := r.cfg.WaitFor(string(event.Type))
 	if wait <= 0 {
-		wait = 30 * time.Minute
+		wait = config.Default().WaitFor(string(event.Type))
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case result := <-p.result:
-		r.finish(p, true)
-		origin := r.resolvedBy(p)
-		r.editPending(p, resolutionStatus(event.Type, result, origin))
+		claimed, releaseStatus := r.finish(p, true)
+		if claimed {
+			origin := r.resolvedBy(p)
+			status := resolutionStatus(event.Type, result, origin)
+			if releaseStatus != "" {
+				status = releaseStatus
+			}
+			r.editPending(p, status)
+		}
 		return result
 	case <-ctx.Done():
-		r.finish(p, true)
-		r.editPending(p, "Cancelado: o turno do agente foi interrompido.")
+		claimed, releaseStatus := r.finish(p, true)
+		if claimed {
+			status := "Cancelado: o turno do agente foi interrompido."
+			if releaseStatus != "" {
+				status = releaseStatus
+			}
+			r.editPending(p, status)
+		}
 		return model.Resolution{Action: model.ActionNone}
 	case <-timer.C:
-		r.finish(p, true)
+		claimed, releaseStatus := r.finish(p, true)
+		if !claimed {
+			return model.Resolution{Action: model.ActionNone}
+		}
+		if releaseStatus != "" {
+			r.editPending(p, releaseStatus)
+			return model.Resolution{Action: model.ActionNone}
+		}
 		switch event.Type {
 		case model.EventQuestion:
 			r.editPending(p, "Tempo esgotado; o agente continuará sem suas respostas.")
@@ -577,7 +610,7 @@ func (r *Router) handleText(ctx context.Context, update channel.Update) {
 			return
 		}
 		r.queueLate(update.SessionID, text)
-		r.reply(ctx, update, "Enfileirado; será entregue na próxima parada desta sessão.", r.sessionRefForSession(update.SessionID))
+		r.reply(ctx, update, r.queuedNotice(update.SessionID), r.sessionRefForSession(update.SessionID))
 		return
 	}
 	if update.ReplyToMessage != 0 {
@@ -594,7 +627,7 @@ func (r *Router) handleText(ctx context.Context, update channel.Update) {
 		}
 		if session != "" {
 			r.queueLate(session, text)
-			r.reply(ctx, update, "Enfileirado; será entregue na próxima parada desta sessão.", r.sessionRefForSession(session))
+			r.reply(ctx, update, r.queuedNotice(session), r.sessionRefForSession(session))
 			return
 		}
 	}
@@ -662,7 +695,7 @@ func (r *Router) handleCommand(ctx context.Context, update channel.Update, text 
 			r.routeTextToPending(ctx, p, update, message)
 		} else {
 			r.queueLate(session, message)
-			r.reply(ctx, update, "Enfileirado; será entregue na próxima parada desta sessão.", r.sessionRefForSession(session))
+			r.reply(ctx, update, r.queuedNotice(session), r.sessionRefForSession(session))
 		}
 	default:
 		return false
@@ -757,9 +790,13 @@ func (r *Router) resolvedBy(p *pending) string {
 	return p.resolvedBy
 }
 
-func (r *Router) finish(p *pending, keepLate bool) {
+func (r *Router) finish(p *pending, keepLate bool) (bool, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if p.finalized {
+		return false, p.releaseStatus
+	}
+	p.finalized = true
 	active := r.pending[p.id] != nil
 	delete(r.pending, p.id)
 	if r.waiting[p.event.SessionID] == p.id {
@@ -772,6 +809,7 @@ func (r *Router) finish(p *pending, keepLate bool) {
 		r.addLateMessagesLocked(p.messages, p.event.SessionID, time.Now())
 	}
 	r.pruneSessionLabelsLocked()
+	return true, p.releaseStatus
 }
 
 func resolutionStatus(eventType model.EventType, resolution model.Resolution, origin string) string {
@@ -922,6 +960,16 @@ func (r *Router) queueLate(session, text string) {
 	}
 }
 
+func (r *Router) queuedNotice(session string) string {
+	r.mu.Lock()
+	idle := r.idle[session]
+	r.mu.Unlock()
+	if idle {
+		return "Sessão parada: o agente já encerrou o turno e não pode ser acordado pelo celular. A mensagem ficou na fila e será entregue quando a sessão voltar a rodar. Para conversar pelo celular, ative /away antes de sair do computador."
+	}
+	return "Enfileirado; será entregue na próxima parada desta sessão."
+}
+
 func (r *Router) endSession(session string) {
 	r.mu.Lock()
 	now := time.Now()
@@ -929,6 +977,7 @@ func (r *Router) endSession(session string) {
 	r.pruneEndedSessionsLocked(now)
 	delete(r.state.Queues, session)
 	delete(r.state.SessionTitles, session)
+	delete(r.idle, session)
 	for messageID, entry := range r.lateMessage {
 		if entry.sessionID == session {
 			delete(r.lateMessage, messageID)
@@ -943,6 +992,7 @@ func (r *Router) endSession(session string) {
 	p := r.pending[id]
 	if p != nil {
 		p.completed = true
+		p.finalized = true
 		select {
 		case p.result <- model.Resolution{Action: model.ActionNone}:
 		default:
@@ -971,12 +1021,32 @@ func (r *Router) Away() bool {
 }
 
 func (r *Router) setAway(away bool) {
+	var released []*pending
 	r.mu.Lock()
 	r.state.Away = away
+	if !away {
+		for _, p := range r.pending {
+			if p.completed {
+				continue
+			}
+			p.completed = true
+			p.releaseStatus = "Liberado: modo ausente desativado."
+			select {
+			case p.result <- model.Resolution{Action: model.ActionNone}:
+				released = append(released, p)
+			default:
+			}
+		}
+	}
 	if err := saveState(r.home, r.state); err != nil {
 		r.logger.Errorf("salvar modo ausente: %v", err)
 	}
 	r.mu.Unlock()
+	for _, p := range released {
+		if claimed, status := r.finish(p, true); claimed {
+			r.editPending(p, status)
+		}
+	}
 }
 
 func (r *Router) Status() (bool, int) {

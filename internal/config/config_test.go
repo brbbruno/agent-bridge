@@ -11,7 +11,7 @@ import (
 
 func TestDefaultsAndHomeOverride(t *testing.T) {
 	cfg := Default()
-	if cfg.Port != 47821 || cfg.StopWait != 30*time.Minute || cfg.PermissionWait != 10*time.Minute || cfg.QuestionWait != 30*time.Minute || !cfg.NotifyWhenPresent {
+	if cfg.Port != 47821 || cfg.StopWait != 8*time.Hour || cfg.PermissionWait != 8*time.Hour || cfg.QuestionWait != 8*time.Hour || cfg.StopWaitText != "8h" || cfg.PermissionWaitText != "8h" || cfg.QuestionWaitText != "8h" || !cfg.NotifyWhenPresent {
 		t.Fatalf("defaults inesperados: %+v", cfg)
 	}
 	t.Setenv("AGENT_BRIDGE_HOME", filepath.Join(t.TempDir(), "bridge-home"))
@@ -79,7 +79,35 @@ func TestLoadMissingConfigUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.StopWait != 30*time.Minute {
-		t.Fatalf("StopWait=%s", cfg.StopWait)
+	if cfg.StopWait != 8*time.Hour || cfg.PermissionWait != 8*time.Hour || cfg.QuestionWait != 8*time.Hour {
+		t.Fatalf("defaults de espera=%s/%s/%s", cfg.StopWait, cfg.PermissionWait, cfg.QuestionWait)
+	}
+}
+
+func TestLoadPreservesExplicitWaitAndDefaultsMissingValues(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(ConfigPath(home), []byte(`{"stop_wait":"30m"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StopWait != 30*time.Minute || cfg.PermissionWait != 8*time.Hour || cfg.QuestionWait != 8*time.Hour {
+		t.Fatalf("waits after load=%s/%s/%s", cfg.StopWait, cfg.PermissionWait, cfg.QuestionWait)
+	}
+}
+
+func TestSaveUsesDefaultWaitFallbacks(t *testing.T) {
+	home := t.TempDir()
+	if err := Save(home, Config{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StopWaitText != "8h" || cfg.PermissionWaitText != "8h" || cfg.QuestionWaitText != "8h" {
+		t.Fatalf("wait text after save=%q/%q/%q", cfg.StopWaitText, cfg.PermissionWaitText, cfg.QuestionWaitText)
 	}
 }

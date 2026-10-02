@@ -141,6 +141,72 @@ func TestMultipleWaitingSessionsShowPickerAndRouteReply(t *testing.T) {
 	}
 }
 
+func TestBackReleasesStopAndPermissionWaits(t *testing.T) {
+	for _, kind := range []model.EventType{model.EventStop, model.EventPermission} {
+		t.Run(string(kind), func(t *testing.T) {
+			router, fake, home := newTestRouter(t, 8*time.Hour)
+			result := runEvent(router, event(kind, "release-session"))
+			sent := waitForSent(t, fake, 1)
+			router.SetAway(false)
+			select {
+			case got := <-result:
+				if got.Action != model.ActionNone {
+					t.Fatalf("/back resolveu com ação %v", got.Action)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("/back não liberou a espera em até um segundo")
+			}
+			_, edits := fake.Snapshot()
+			edited := false
+			for _, edit := range edits {
+				if edit.ID == sent[0].ID {
+					if !strings.Contains(edit.Text, "Liberado: modo ausente desativado.") {
+						t.Fatalf("mensagem não foi atualizada após /back: %q", edit.Text)
+					}
+					if len(edit.Keyboard) != 0 {
+						t.Fatalf("botões da solicitação não foram removidos: %+v", edit.Keyboard)
+					}
+					edited = true
+					break
+				}
+			}
+			if !edited {
+				t.Fatal("mensagem da solicitação não foi editada após /back")
+			}
+			router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, Text: "resposta depois da liberação", ReplyToMessage: sent[0].ID})
+			if state, err := loadState(home); err != nil || len(state.Queues["release-session"]) != 1 || state.Queues["release-session"][0] != "resposta depois da liberação" {
+				t.Fatalf("resposta após /back não preservou o vínculo tardio: %+v, err=%v", state.Queues["release-session"], err)
+			}
+		})
+	}
+}
+
+func TestIdleSessionQueueNoticeChangesWhenSessionResumes(t *testing.T) {
+	router, fake, home := newTestRouter(t, time.Second)
+	router.SetAway(false)
+	if got := router.HandleEvent(context.Background(), event(model.EventStop, "idle-session")); got.Action != model.ActionNone {
+		t.Fatalf("Stop em modo presente=%+v", got)
+	}
+	waitForSent(t, fake, 1)
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, SessionID: "idle-session", Text: "resposta enquanto parada"})
+	sent := waitForSent(t, fake, 2)
+	if !strings.Contains(sent[1].Text, "Sessão parada: o agente já encerrou o turno") {
+		t.Fatalf("aviso de sessão parada ausente: %q", sent[1].Text)
+	}
+	if state, err := loadState(home); err != nil || len(state.Queues["idle-session"]) != 1 || state.Queues["idle-session"][0] != "resposta enquanto parada" {
+		t.Fatalf("resposta não foi enfileirada: state=%+v, err=%v", state, err)
+	}
+	router.HandleEvent(context.Background(), event(model.EventPrompt, "idle-session"))
+	router.HandleUpdate(context.Background(), channel.Update{Channel: "Telegram", ChatID: 123, SessionID: "idle-session", Text: "resposta durante a sessão"})
+	sent = waitForSent(t, fake, 3)
+	if sent[2].Text != "Enfileirado; será entregue na próxima parada desta sessão." {
+		t.Fatalf("aviso de sessão ativa inesperado: %q", sent[2].Text)
+	}
+	if state, err := loadState(home); err != nil || len(state.Queues["idle-session"]) != 2 {
+		t.Fatalf("fila após retomada=%v, err=%v", state.Queues["idle-session"], err)
+	}
+}
+
 func TestLateReplyQueuedAndDeliveredAtNextStop(t *testing.T) {
 	router, fake, home := newTestRouter(t, 70*time.Millisecond)
 	result := runEvent(router, event(model.EventStop, "late-session"))
